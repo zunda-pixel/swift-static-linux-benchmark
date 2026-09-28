@@ -1,0 +1,104 @@
+name: benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      endpoints:
+        description: Endpoints to benchmark (space separated)
+        default: plaintext json allocation parallel-allocation
+      concurrencies:
+        description: Concurrency levels (space separated)
+        default: 1 10 25 50 100
+      reps:
+        description: Repetitions per condition
+        default: "5"
+      warmup:
+        description: Warmup seconds per endpoint
+        default: "10"
+      duration:
+        description: Seconds per measurement
+        default: "30"
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OHA_VERSION: v1.16.0
+
+jobs:
+  benchmark:
+    # All variants are built and measured in this single job so they share one runner VM.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build glibc
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: glibc
+          outputs: type=local,dest=bin/glibc
+          cache-from: type=gha,scope=benchmark
+          cache-to: type=gha,scope=benchmark,mode=max
+
+      - name: Build musl-sdk
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: musl-sdk
+          outputs: type=local,dest=bin/musl-sdk
+          cache-from: type=gha,scope=benchmark
+
+      - name: Build musl-mimalloc-v3
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: musl-mimalloc-v3
+          outputs: type=local,dest=bin/musl-mimalloc-v3
+          cache-from: type=gha,scope=benchmark
+
+      - name: Install oha
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/oha "https://github.com/hatoo/oha/releases/download/${OHA_VERSION}/oha-linux-amd64"
+          sudo chmod +x /usr/local/bin/oha
+          oha --version
+
+      - name: Verify binaries and allocators
+        run: scripts/verify.sh
+
+      - name: Collect environment
+        run: python3 scripts/collect_env.py results bin
+
+      - name: Benchmark
+        env:
+          # Pull requests and pushes run a short smoke benchmark; full runs are manual.
+          ENDPOINTS: ${{ github.event_name == 'workflow_dispatch' && inputs.endpoints || 'plaintext json allocation parallel-allocation' }}
+          CONCURRENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrencies || '1 50' }}
+          REPS: ${{ github.event_name == 'workflow_dispatch' && inputs.reps || '1' }}
+          WARMUP: ${{ github.event_name == 'workflow_dispatch' && inputs.warmup || '1' }}
+          DURATION: ${{ github.event_name == 'workflow_dispatch' && inputs.duration || '3' }}
+        run: scripts/benchmark.sh
+
+      - name: Summarize
+        if: always()
+        run: python3 scripts/summarize.py results | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            results/
+            bin/*/build-info.json
+            bin/*/swift-version.txt
+            bin/*/runtime-allocator.txt

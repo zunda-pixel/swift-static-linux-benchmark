@@ -62,6 +62,7 @@ def main():
         info = json.loads(read(variant_dir / "build-info.json") or "{}")
         info["swift_version"] = read(variant_dir / "swift-version.txt")
         info["swift_sdk"] = read(variant_dir / "swift-sdk.txt")
+        info["runtime_allocator"] = read(variant_dir / "runtime-allocator.txt")
         info["file"] = run("file", "-b", str(variant_dir / "BenchmarkServer"))
         info["size_bytes"] = (variant_dir / "BenchmarkServer").stat().st_size
         variants[variant_dir.name] = info

@@ -49,22 +49,22 @@ jobs:
           cache-from: type=gha,scope=benchmark
           cache-to: type=gha,scope=benchmark,mode=max
 
-      - name: Build musl
+      - name: Build musl-sdk
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
-          target: musl
-          outputs: type=local,dest=bin/musl
+          target: musl-sdk
+          outputs: type=local,dest=bin/musl-sdk
           cache-from: type=gha,scope=benchmark
 
-      - name: Build musl-mimalloc
+      - name: Build musl-mimalloc-v3
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile
-          target: musl-mimalloc
-          outputs: type=local,dest=bin/musl-mimalloc
+          target: musl-mimalloc-v3
+          outputs: type=local,dest=bin/musl-mimalloc-v3
           cache-from: type=gha,scope=benchmark
 
       - name: Install oha
@@ -101,3 +101,4 @@ jobs:
             results/
             bin/*/build-info.json
             bin/*/swift-version.txt
+            bin/*/runtime-allocator.txt

@@ -6,7 +6,7 @@
 # consistently favour one variant.
 #
 # Configuration (environment variables):
-#   VARIANTS       default: "glibc musl musl-mimalloc"
+#   VARIANTS       default: "glibc musl-sdk musl-mimalloc-v3"
 #   ENDPOINTS      default: "plaintext json allocation parallel-allocation"
 #   CONCURRENCIES  default: "1 10 25 50 100"
 #   REPS           default: 5
@@ -20,7 +20,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 trap stop_server EXIT
 
-read -r -a VARIANTS <<<"${VARIANTS:-glibc musl musl-mimalloc}"
+read -r -a VARIANTS <<<"${VARIANTS:-glibc musl-sdk musl-mimalloc-v3}"
 read -r -a ENDPOINTS <<<"${ENDPOINTS:-plaintext json allocation parallel-allocation}"
 read -r -a CONCURRENCIES <<<"${CONCURRENCIES:-1 10 25 50 100}"
 REPS=${REPS:-5}

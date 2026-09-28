@@ -4,8 +4,10 @@
 # build metadata, meant to be exported with `--output type=local,dest=bin/<variant>`:
 #
 #   glibc          Ubuntu glibc + glibc malloc, Swift runtime dynamically linked (bundled in lib/)
-#   musl           Swift Static Linux SDK (musl + musl malloc), fully static
-#   musl-mimalloc  Swift Static Linux SDK with mimalloc.o overriding malloc, fully static
+#   musl-sdk          Swift Static Linux SDK as shipped, fully static. The SDK already replaces
+#                     musl's allocator in libc.a with mimalloc (swiftlang/swift-docker#488).
+#   musl-mimalloc-v3  Swift Static Linux SDK with our mimalloc v3 mimalloc.o linked in, which
+#                     takes precedence over the SDK's bundled mimalloc, fully static
 #
 # The toolchain and SDK versions match zunda-pixel/blindlog-api#379.
 
@@ -50,21 +52,21 @@ RUN swift build -c release --product BenchmarkServer \
     && printf '{"variant":"glibc","libc":"glibc","allocator":"glibc malloc","swift_stdlib":"dynamic","build_flags":"-c release"}\n' > /out/build-info.json
 
 # ================================
-# musl
+# musl-sdk
 # ================================
-FROM source AS build-musl
+FROM source AS build-musl-sdk
 RUN SDK="$(uname -m)-swift-linux-musl" \
     && swift build -c release --product BenchmarkServer --swift-sdk "$SDK" \
     && mkdir -p /out \
     && cp "$(swift build -c release --swift-sdk "$SDK" --show-bin-path)/BenchmarkServer" /out/ \
     && swift --version > /out/swift-version.txt 2>&1 \
     && swift sdk list > /out/swift-sdk.txt \
-    && printf '{"variant":"musl","libc":"musl","allocator":"musl malloc","swift_stdlib":"static","build_flags":"-c release --swift-sdk %s"}\n' "$SDK" > /out/build-info.json
+    && printf '{"variant":"musl-sdk","libc":"musl","allocator":"mimalloc (bundled in the Static Linux SDK)","swift_stdlib":"static","build_flags":"-c release --swift-sdk %s"}\n' "$SDK" > /out/build-info.json
 
 # ================================
-# musl + mimalloc
+# musl + mimalloc v3
 # ================================
-FROM source AS build-musl-mimalloc
+FROM source AS build-musl-mimalloc-v3
 ARG MIMALLOC_VERSION
 RUN SDK="$(uname -m)-swift-linux-musl" \
     && swift build -c release --product BenchmarkServer --swift-sdk "$SDK" -Xlinker /mimalloc/mimalloc.o \
@@ -72,7 +74,7 @@ RUN SDK="$(uname -m)-swift-linux-musl" \
     && cp "$(swift build -c release --swift-sdk "$SDK" -Xlinker /mimalloc/mimalloc.o --show-bin-path)/BenchmarkServer" /out/ \
     && swift --version > /out/swift-version.txt 2>&1 \
     && swift sdk list > /out/swift-sdk.txt \
-    && printf '{"variant":"musl-mimalloc","libc":"musl","allocator":"mimalloc %s","swift_stdlib":"static","build_flags":"-c release --swift-sdk %s -Xlinker mimalloc.o"}\n' "$MIMALLOC_VERSION" "$SDK" > /out/build-info.json
+    && printf '{"variant":"musl-mimalloc-v3","libc":"musl","allocator":"mimalloc %s","swift_stdlib":"static","build_flags":"-c release --swift-sdk %s -Xlinker mimalloc.o"}\n' "$MIMALLOC_VERSION" "$SDK" > /out/build-info.json
 
 # ================================
 # Export stages
@@ -80,8 +82,8 @@ RUN SDK="$(uname -m)-swift-linux-musl" \
 FROM scratch AS glibc
 COPY --from=build-glibc /out/ /
 
-FROM scratch AS musl
-COPY --from=build-musl /out/ /
+FROM scratch AS musl-sdk
+COPY --from=build-musl-sdk /out/ /
 
-FROM scratch AS musl-mimalloc
-COPY --from=build-musl-mimalloc /out/ /
+FROM scratch AS musl-mimalloc-v3
+COPY --from=build-musl-mimalloc-v3 /out/ /

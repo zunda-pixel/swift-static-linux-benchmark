@@ -19,7 +19,12 @@ symbol_address() {
   awk -v s="$2" '$3 == s { print $1; exit }' <<<"$1"
 }
 
-for variant in glibc musl musl-mimalloc; do
+# Expected allocator per variant: "glibc", or the mimalloc version that must be active.
+# musl-sdk: the Static Linux SDK replaces musl's allocator in libc.a with its bundled
+# mimalloc (swiftlang/swift-docker#488), so any mimalloc version other than ours is expected.
+MIMALLOC_VERSION=${MIMALLOC_VERSION:-v3.5.3}
+
+for variant in glibc musl-sdk musl-mimalloc-v3; do
   bin=$(server_binary "$variant")
   echo "== $variant ($bin)"
   if [[ ! -x "$bin" ]]; then
@@ -38,39 +43,42 @@ for variant in glibc musl musl-mimalloc; do
       if grep -q "$BIN_DIR/glibc/lib/libswiftCore.so" <<<"$ldd_out"; then pass "Swift runtime resolves to the bundled lib/"; else fail "libswiftCore.so is not resolved from bin/glibc/lib"; fi
       if grep -q "not found" <<<"$ldd_out"; then fail "unresolved shared libraries"; else pass "all shared libraries resolved"; fi
       ;;
-    musl | musl-mimalloc)
+    *)
       if grep -q "statically linked" <<<"$file_out"; then pass "statically linked"; else fail "expected a static executable"; fi
       ;;
   esac
 
   mi_malloc=$(symbol_address "$symbols" mi_malloc)
   malloc=$(symbol_address "$symbols" malloc)
-  case $variant in
-    musl-mimalloc)
-      if [[ -n "$mi_malloc" ]]; then pass "mimalloc is linked (mi_malloc @ $mi_malloc)"; else fail "mi_malloc symbol not found"; fi
-      if [[ -n "$malloc" && "$malloc" == "$mi_malloc" ]]; then
-        pass "malloc resolves to mi_malloc ($malloc)"
-      else
-        fail "malloc (@ ${malloc:-none}) does not resolve to mi_malloc (@ ${mi_malloc:-none})"
-      fi
-      ;;
-    *)
-      if [[ -z "$mi_malloc" ]]; then pass "mimalloc is not linked"; else fail "unexpected mi_malloc symbol"; fi
-      ;;
-  esac
+  if [[ $variant == glibc ]]; then
+    if [[ -z "$mi_malloc" ]]; then pass "mimalloc is not linked"; else fail "unexpected mi_malloc symbol"; fi
+  else
+    if [[ -n "$mi_malloc" ]]; then pass "mimalloc is linked (mi_malloc @ $mi_malloc)"; else fail "mi_malloc symbol not found"; fi
+    if [[ -n "$malloc" && "$malloc" == "$mi_malloc" ]]; then
+      pass "malloc resolves to mi_malloc ($malloc)"
+    else
+      fail "malloc (@ ${malloc:-none}) does not resolve to mi_malloc (@ ${mi_malloc:-none})"
+    fi
+  fi
 
-  # Runtime check: mimalloc prints its options to stderr when MIMALLOC_VERBOSE=1.
+  # Runtime check: mimalloc prints its version and options to stderr when MIMALLOC_VERBOSE=1.
   log=$(mktemp)
   start_server "$variant" "$log" "" MIMALLOC_VERBOSE=1
   curl -sf "$BASE_URL/allocation" >/dev/null
   stop_server
-  if grep -q "mimalloc" "$log"; then
-    [[ $variant == musl-mimalloc ]] && pass "mimalloc active at runtime" || fail "mimalloc output from a non-mimalloc build"
+  runtime_version=$(grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' "$log" | head -n 1 || true)
+  if [[ $variant == glibc ]]; then
+    if grep -q "mimalloc" "$log"; then fail "mimalloc output from the glibc build"; else pass "no mimalloc output at runtime"; fi
+    echo "glibc malloc" >"$BIN_DIR/$variant/runtime-allocator.txt"
   else
-    [[ $variant == musl-mimalloc ]] && fail "no mimalloc output at runtime (MIMALLOC_VERBOSE=1)" || pass "no mimalloc output at runtime"
-  fi
-  if [[ $variant == musl-mimalloc ]]; then
-    sed -n '1,5p' "$log"
+    if [[ -n "$runtime_version" ]]; then pass "mimalloc $runtime_version active at runtime"; else fail "no mimalloc version in MIMALLOC_VERBOSE=1 output"; fi
+    if [[ $variant == musl-mimalloc-v3 ]]; then
+      if [[ "$runtime_version" == "$MIMALLOC_VERSION" ]]; then pass "our mimalloc $MIMALLOC_VERSION overrides the SDK's"; else fail "expected mimalloc $MIMALLOC_VERSION, got ${runtime_version:-none}"; fi
+    else
+      if [[ -n "$runtime_version" && "$runtime_version" != "$MIMALLOC_VERSION" ]]; then pass "SDK-bundled mimalloc is in use"; else fail "expected the SDK-bundled mimalloc, got ${runtime_version:-none}"; fi
+    fi
+    echo "mimalloc ${runtime_version:-unknown}" >"$BIN_DIR/$variant/runtime-allocator.txt"
+    sed -n '1,4p' "$log"
   fi
   rm -f "$log"
 

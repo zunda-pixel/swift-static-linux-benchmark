@@ -27,7 +27,7 @@ for variant in glibc musl musl-mimalloc; do
     continue
   fi
   file_out=$(file "$bin")
-  ldd_out=$(ldd "$bin" 2>&1 || true)
+  ldd_out=$(LD_LIBRARY_PATH="$BIN_DIR/$variant/lib" ldd "$bin" 2>&1 || true)
   symbols=$(nm "$bin" 2>/dev/null || true)
   echo "$file_out"
   echo "$ldd_out"
@@ -35,7 +35,8 @@ for variant in glibc musl musl-mimalloc; do
   case $variant in
     glibc)
       if grep -q "dynamically linked" <<<"$file_out"; then pass "dynamically linked against glibc"; else fail "expected a dynamic executable"; fi
-      if grep -q "libswiftCore" <<<"$ldd_out"; then fail "Swift runtime is linked dynamically"; else pass "Swift runtime is linked statically"; fi
+      if grep -q "$BIN_DIR/glibc/lib/libswiftCore.so" <<<"$ldd_out"; then pass "Swift runtime resolves to the bundled lib/"; else fail "libswiftCore.so is not resolved from bin/glibc/lib"; fi
+      if grep -q "not found" <<<"$ldd_out"; then fail "unresolved shared libraries"; else pass "all shared libraries resolved"; fi
       ;;
     musl | musl-mimalloc)
       if grep -q "statically linked" <<<"$file_out"; then pass "statically linked"; else fail "expected a static executable"; fi

@@ -3,7 +3,7 @@
 # Builds the three benchmark variants. Each final stage contains only the binary and
 # build metadata, meant to be exported with `--output type=local,dest=bin/<variant>`:
 #
-#   glibc          Ubuntu glibc + glibc malloc, Swift runtime statically linked
+#   glibc          Ubuntu glibc + glibc malloc, Swift runtime dynamically linked (bundled in lib/)
 #   musl           Swift Static Linux SDK (musl + musl malloc), fully static
 #   musl-mimalloc  Swift Static Linux SDK with mimalloc.o overriding malloc, fully static
 #
@@ -39,11 +39,15 @@ COPY Sources ./Sources
 # glibc
 # ================================
 FROM source AS build-glibc
-RUN swift build -c release --product BenchmarkServer --static-swift-stdlib \
-    && mkdir -p /out \
-    && cp "$(swift build -c release --static-swift-stdlib --show-bin-path)/BenchmarkServer" /out/ \
+# `--static-swift-stdlib` fails to link Foundation with Swift 6.4.0 (unresolved CoreFoundation
+# symbols from libFoundation.a, the issue mentioned in blindlog-api#379), so the Swift runtime
+# is linked dynamically and its shared libraries are shipped next to the binary.
+RUN swift build -c release --product BenchmarkServer \
+    && mkdir -p /out/lib \
+    && cp "$(swift build -c release --show-bin-path)/BenchmarkServer" /out/ \
+    && cp -a /usr/lib/swift/linux/*.so* /out/lib/ \
     && swift --version > /out/swift-version.txt 2>&1 \
-    && printf '{"variant":"glibc","libc":"glibc","allocator":"glibc malloc","swift_stdlib":"static","build_flags":"-c release --static-swift-stdlib"}\n' > /out/build-info.json
+    && printf '{"variant":"glibc","libc":"glibc","allocator":"glibc malloc","swift_stdlib":"dynamic","build_flags":"-c release"}\n' > /out/build-info.json
 
 # ================================
 # musl

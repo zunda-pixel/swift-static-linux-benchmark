@@ -19,13 +19,14 @@ musl では Ubuntu の jemalloc が使えないため musl 標準の malloc に�
 
 | Variant | libc | allocator | Build |
 |---|---|---|---|
-| `glibc` | glibc（動的） | glibc malloc | `swift build -c release --static-swift-stdlib` |
+| `glibc` | glibc（動的） | glibc malloc | `swift build -c release`（Swift runtime は動的リンク） |
 | `musl` | musl（静的） | musl malloc | `swift build -c release --swift-sdk x86_64-swift-linux-musl` |
 | `musl-mimalloc` | musl（静的） | mimalloc | 上記 + `-Xlinker mimalloc.o` |
 
 - Swift 6.4.0（`swift:6.4.0-noble`）、Static Linux SDK `swift-6.4.0-RELEASE_static-linux-0.1.0`、mimalloc v3.5.3。
   バージョンは [`docker/Dockerfile`](docker/Dockerfile) の `ARG` で固定しています。
-- glibc 版も Swift runtime は静的リンクにし、差分をできるだけ「libc + allocator」に寄せています。
+- glibc 版は本来 `--static-swift-stdlib` で Swift runtime も静的リンクにしたいところですが、Swift 6.4.0 では Foundation がリンクできない（CoreFoundation のシンボルが未解決になる）ため、Swift runtime を動的リンクにして `bin/glibc/lib/` に同梱しています。
+  そのため glibc 版と musl 版の間には「Swift runtime が動的か静的か」の差も含まれます。
 - mimalloc は[公式の static override 方式](https://github.com/microsoft/mimalloc#static-override)に従い、
   `src/static.c` を musl sysroot 向けに `mimalloc.o` へコンパイルして最終リンクに渡しています（[`scripts/build-mimalloc.sh`](scripts/build-mimalloc.sh)）。
 - glibc + jemalloc は意図的に含めていません。libc・allocator・static/dynamic の差が混ざるためです（第2フェーズ参照）。
@@ -35,7 +36,7 @@ musl では Ubuntu の jemalloc が使えないため musl 標準の malloc に�
 `musl-mimalloc` が実は musl malloc を使っていた、ではベンチマーク全体が無意味になるため、
 [`scripts/verify.sh`](scripts/verify.sh) で以下を確認し、失敗したら CI を落とします。
 
-1. `file` / `ldd`: musl 系は `statically linked`、glibc 版は libswiftCore に動的依存していない
+1. `file` / `ldd`: musl 系は `statically linked`、glibc 版は同梱した `lib/` から Swift runtime が解決される
 2. `nm`: `musl-mimalloc` では `malloc` のアドレスが `mi_malloc` と一致する。他の variant には `mi_malloc` が無い
 3. 実行時: `MIMALLOC_VERBOSE=1` で起動したとき、`musl-mimalloc` だけが mimalloc の出力を出す
 4. 全 variant・全 endpoint が 200 を返す

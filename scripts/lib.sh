@@ -16,7 +16,8 @@ start_server() {
   shift 3
   local bin
   bin=$(server_binary "$variant")
-  local cmd=(env PORT="$PORT" "$@" "$bin")
+  # The glibc variant ships the Swift runtime shared libraries in lib/.
+  local cmd=(env PORT="$PORT" LD_LIBRARY_PATH="$BIN_DIR/$variant/lib" "$@" "$bin")
   if [[ -n "$cpus" ]]; then
     cmd=(taskset -c "$cpus" "${cmd[@]}")
   fi

@@ -35,9 +35,12 @@ clang \
   -o "$OUT"
 
 # Sanity check: the object must export the standard allocation entry points.
+# (nm output is captured first: with pipefail, `nm | grep -q` fails on SIGPIPE.)
+symbols=$(nm "$OUT")
 for sym in malloc free calloc realloc posix_memalign aligned_alloc malloc_usable_size; do
-  if ! nm "$OUT" | grep -qE " T ${sym}$"; then
+  if ! grep -qE " [TW] ${sym}$" <<<"$symbols"; then
     echo "error: $OUT does not define ${sym}" >&2
+    grep -E " ${sym}$" <<<"$symbols" >&2 || true
     exit 1
   fi
 done

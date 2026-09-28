@@ -12,9 +12,11 @@ failures=0
 pass() { echo "  ok: $*"; }
 fail() { echo "  FAIL: $*"; failures=$((failures + 1)); }
 
-# Address of a symbol in the binary's symbol table, or empty.
+# Address of a symbol in an `nm` listing, or empty.
+# (Command output is captured into variables throughout: with pipefail, a reader that
+# exits early, like `grep -q`, makes the writer fail with SIGPIPE.)
 symbol_address() {
-  nm "$1" 2>/dev/null | awk -v s="$2" '$3 == s { print $1; exit }'
+  awk -v s="$2" '$3 == s { print $1; exit }' <<<"$1"
 }
 
 for variant in glibc musl musl-mimalloc; do
@@ -24,21 +26,24 @@ for variant in glibc musl musl-mimalloc; do
     fail "binary missing"
     continue
   fi
-  file "$bin"
-  ldd "$bin" 2>&1 || true
+  file_out=$(file "$bin")
+  ldd_out=$(ldd "$bin" 2>&1 || true)
+  symbols=$(nm "$bin" 2>/dev/null || true)
+  echo "$file_out"
+  echo "$ldd_out"
 
   case $variant in
     glibc)
-      if file "$bin" | grep -q "dynamically linked"; then pass "dynamically linked against glibc"; else fail "expected a dynamic executable"; fi
-      if ldd "$bin" | grep -q "libswiftCore"; then fail "Swift runtime is linked dynamically"; else pass "Swift runtime is linked statically"; fi
+      if grep -q "dynamically linked" <<<"$file_out"; then pass "dynamically linked against glibc"; else fail "expected a dynamic executable"; fi
+      if grep -q "libswiftCore" <<<"$ldd_out"; then fail "Swift runtime is linked dynamically"; else pass "Swift runtime is linked statically"; fi
       ;;
     musl | musl-mimalloc)
-      if file "$bin" | grep -q "statically linked"; then pass "statically linked"; else fail "expected a static executable"; fi
+      if grep -q "statically linked" <<<"$file_out"; then pass "statically linked"; else fail "expected a static executable"; fi
       ;;
   esac
 
-  mi_malloc=$(symbol_address "$bin" mi_malloc)
-  malloc=$(symbol_address "$bin" malloc)
+  mi_malloc=$(symbol_address "$symbols" mi_malloc)
+  malloc=$(symbol_address "$symbols" malloc)
   case $variant in
     musl-mimalloc)
       if [[ -n "$mi_malloc" ]]; then pass "mimalloc is linked (mi_malloc @ $mi_malloc)"; else fail "mi_malloc symbol not found"; fi
@@ -72,8 +77,8 @@ for variant in glibc musl musl-mimalloc; do
   log=$(mktemp)
   start_server "$variant" "$log" ""
   for endpoint in "${ENDPOINTS_ALL[@]}"; do
-    body=$(curl -sf "$BASE_URL/$endpoint" | head -c 80) || { fail "/$endpoint request failed"; continue; }
-    if [[ -n "$body" ]]; then pass "/$endpoint -> $body"; else fail "/$endpoint returned an empty body"; fi
+    body=$(curl -sf "$BASE_URL/$endpoint") || { fail "/$endpoint request failed"; continue; }
+    if [[ -n "$body" ]]; then pass "/$endpoint -> ${body:0:80}"; else fail "/$endpoint returned an empty body"; fi
   done
   stop_server
   rm -f "$log"

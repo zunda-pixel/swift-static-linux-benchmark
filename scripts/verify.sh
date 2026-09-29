@@ -63,7 +63,12 @@ for variant in "${VARIANTS[@]}"; do
     glibc*)
       if grep -q "dynamically linked" <<<"$file_out"; then pass "dynamically linked against glibc"; else fail "expected a dynamic executable"; fi
       if grep -q "$BIN_DIR/$variant/lib/libswiftCore.so" <<<"$ldd_out"; then pass "Swift runtime resolves to the bundled lib/"; else fail "libswiftCore.so is not resolved from bin/$variant/lib"; fi
-      if grep -q "libc.so.6 => $expected_libc " <<<"$ldd_out"; then pass "libc.so.6 resolves to $expected_libc"; else fail "libc.so.6 does not resolve to $expected_libc"; fi
+      resolved_libc=$(awk '$1 == "libc.so.6" { print $3; exit }' <<<"$ldd_out")
+      if [[ -n "$resolved_libc" && "$(realpath "$resolved_libc")" == "$(realpath "$expected_libc")" ]]; then
+        pass "libc.so.6 resolves to $resolved_libc"
+      else
+        fail "libc.so.6 resolves to ${resolved_libc:-nothing}, expected $expected_libc"
+      fi
       if grep -q "not found" <<<"$ldd_out"; then fail "unresolved shared libraries"; else pass "all shared libraries resolved"; fi
       ;;
     *)

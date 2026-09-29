@@ -27,15 +27,17 @@ musl では Ubuntu の jemalloc が使えないため musl 標準の malloc に�
 
 | Variant | libc | allocator | Build |
 |---|---|---|---|
-| `glibc` | glibc（動的） | glibc malloc | `swift build -c release`（Swift runtime は動的リンク） |
+| `glibc` | glibc（動的） | glibc malloc | `swift build -c release -Xswiftc -static-stdlib` |
 | `musl-sdk` | musl（静的） | mimalloc（SDK 同梱の版） | `swift build -c release --swift-sdk x86_64-swift-linux-musl` |
 | `musl-mimalloc-v3` | musl（静的） | mimalloc v3.5.3 | 上記 + `-Xlinker mimalloc.o` |
 
 - Swift 6.4.0（`swift:6.4.0-resolute`、Ubuntu 26.04）、Static Linux SDK `swift-6.4.0-RELEASE_static-linux-0.1.0`、mimalloc v3.5.3。
   バージョンは [`docker/Dockerfile`](docker/Dockerfile) の `ARG` で固定しています。
   SDK 同梱の mimalloc の版は `verify.sh` が実行時に読み取り、`environment.json` と Job Summary に記録します。
-- glibc 版は本来 `--static-swift-stdlib` で Swift runtime も静的リンクにしたいところですが、Swift 6.4.0 では Foundation がリンクできない（CoreFoundation のシンボルが未解決になる）ため、Swift runtime を動的リンクにして `bin/glibc/lib/` に同梱しています。
-  そのため glibc 版と musl 版の間には「Swift runtime が動的か静的か」の差も含まれます。
+- glibc 系の variant はすべて `-Xswiftc -static-stdlib` で Swift runtime（Foundation を含む）を静的リンクしています。musl 系も Swift runtime は静的なので、両者の差は libc と allocator（とリンク方式）に絞られます。
+  SwiftPM の `--static-swift-stdlib` は、Swift 6.4.0 のデフォルトのビルドシステム（swiftbuild）では Foundation がリンクできない（CoreFoundation のシンボルが未解決になる）ため使っていません
+  （[swiftlang/swift-package-manager#10592](https://github.com/swiftlang/swift-package-manager/issues/10592)）。
+  **2026-09-28 / 09-29 の結果は、glibc 系の Swift runtime を動的リンクにしていた時点のもの**です。
 - `musl-mimalloc-v3` は[公式の static override 方式](https://github.com/microsoft/mimalloc#static-override)に従い、
   `src/static.c` を musl sysroot 向けに `mimalloc.o` へコンパイルして最終リンクに渡しています（[`scripts/build-mimalloc.sh`](scripts/build-mimalloc.sh)）。
   object file として直接リンクされるため、`libc.a` 内の SDK 同梱 mimalloc より優先されます。
@@ -66,7 +68,7 @@ blindlog-api の #379 直前（commit eecd754）の Dockerfile と同じ構成�
 | | 移行前の blindlog-api | `glibc-noble-2.39-jemalloc` |
 |---|---|---|
 | ビルドイメージ | `swift:6.4.0-noble` | `swift:6.4.0-noble` |
-| ビルド | `-Xswiftc -static-stdlib -Xlinker -ljemalloc` | 同じ（リンクできない場合は Swift runtime を動的リンクにし、`build-info.json` に記録） |
+| ビルド | `-Xswiftc -static-stdlib -Xlinker -ljemalloc` | 同じ |
 | 実行時の glibc | `ubuntu:noble`（2.39） | 同梱の 2.39 |
 | jemalloc | Ubuntu の `libjemalloc2` | 同じパッケージの `libjemalloc.so.2` を同梱 |
 
@@ -74,7 +76,7 @@ blindlog-api の #379 直前（commit eecd754）の Dockerfile と同じ構成�
 比べると次のことが分かります。
 
 - `musl-sdk` との比較: blindlog-api#379 の移行で、本番の性能がどう変わったか
-- `glibc-noble-2.39` との比較: 同じ glibc 2.39 での、glibc malloc と jemalloc の差（Swift runtime の静的 / 動的の差も含む）
+- `glibc-noble-2.39` との比較: 同じ glibc 2.39・同じビルド方法での、glibc malloc と jemalloc の差
 - allocation 系で `musl-sdk` とほぼ同じなら、musl 系の優位は allocator（glibc malloc と比べた新しい allocator）によるもの
 
 ### allocator が本当に想定どおりかの検証
@@ -82,7 +84,7 @@ blindlog-api の #379 直前（commit eecd754）の Dockerfile と同じ構成�
 variant 名と実際の allocator が食い違っていてはベンチマーク全体が無意味になるため（実際に上記の前提違いはこれで見つかりました）、
 [`scripts/verify.sh`](scripts/verify.sh) で以下を確認し、失敗したら CI を落とします。
 
-1. `file` / `ldd`: musl 系は `statically linked`。glibc 系は Swift runtime が同梱した `lib/` から解決される（静的リンクでビルドした場合は依存がない）こと、
+1. `file` / `ldd`: musl 系は `statically linked`。glibc 系は Swift runtime への動的依存がないこと、
    `libc.so.6` が想定したもの（host か同梱）に解決されること、jemalloc 版では `libjemalloc.so.2` が同梱したものに解決されること
 2. `nm`: musl 系では `malloc` のアドレスが `mi_malloc` と一致する。glibc 版には `mi_malloc` が無い
 3. 実行時（`MIMALLOC_VERBOSE=1`、`MALLOC_CONF=stats_print:true`）: glibc 系は mimalloc の出力なし、`musl-mimalloc-v3` は v3.5.3、`musl-sdk` はそれ以外の版（SDK 同梱）。
@@ -355,6 +357,6 @@ GitHub-hosted runner は共有 VM でノイズがあるため、rep 間の stdev
 - musl 本来の allocator（mallocng）を復元した variant を追加し、「musl malloc だった場合」との比較も行う
 - コア数の多い runner での計測（2 コアでは CPU が頭打ちになり、contention が見えにくい）
 - ARM64 runner での比較
-- p99 の差の原因の切り分け（glibc 版を Swift runtime 静的リンクにできれば、runtime の動的 / 静的の差を除ける）
+- p99 の差の原因の切り分け（glibc 系を Swift runtime 静的リンクにしたので、再計測で runtime の動的 / 静的の差を除いて比べられる）
 - glibc 2.43 で plaintext / json が遅くなった原因の調査（`perf` で glibc 2.39 と 2.43 を比べる）
 - 差が出た条件で `perf stat` / `perf record` による解析（`futex`、`malloc` / `free`、lock 周辺）

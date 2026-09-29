@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
 #
-# Builds the three benchmark variants. Each final stage contains only the binary and
+# Builds the benchmark variants. Each final stage contains only the binary and
 # build metadata, meant to be exported with `--output type=local,dest=bin/<variant>`:
 #
-#   glibc             Ubuntu 26.04 build, host glibc + glibc malloc, Swift runtime dynamically
-#                     linked (bundled in lib/)
+#   glibc             Ubuntu 26.04 build, host glibc + glibc malloc. Like every glibc variant,
+#                     the Swift runtime is linked statically (-Xswiftc -static-stdlib)
 #   glibc-noble       same, but built on Ubuntu 24.04
 #   glibc-noble-2.39  Ubuntu 24.04 build that also bundles and runs with glibc 2.39
 #   glibc-noble-2.39-jemalloc
@@ -49,15 +49,15 @@ COPY Sources ./Sources
 # glibc
 # ================================
 FROM source AS build-glibc
-# `--static-swift-stdlib` fails to link Foundation with Swift 6.4.0 (unresolved CoreFoundation
-# symbols from libFoundation.a, the issue mentioned in blindlog-api#379), so the Swift runtime
-# is linked dynamically and its shared libraries are shipped next to the binary.
-RUN swift build -c release --product BenchmarkServer \
-    && mkdir -p /out/lib \
+# The Swift runtime (including Foundation) is linked statically with `-Xswiftc -static-stdlib`,
+# as blindlog-api did before #379. SwiftPM's `--static-swift-stdlib` fails to link Foundation
+# with Swift 6.4.0's default swiftbuild build system (unresolved CoreFoundation symbols from
+# libFoundation.a; swiftlang/swift-package-manager#10592), but this works.
+RUN swift build -c release --product BenchmarkServer -Xswiftc -static-stdlib \
+    && mkdir -p /out \
     && cp "$(swift build -c release --show-bin-path)/BenchmarkServer" /out/ \
-    && cp -a /usr/lib/swift/linux/*.so* /out/lib/ \
     && swift --version > /out/swift-version.txt 2>&1 \
-    && printf '{"variant":"glibc","libc":"glibc (host)","allocator":"glibc malloc","swift_stdlib":"dynamic","build_image":"swift:6.4.0-resolute","build_flags":"-c release"}\n' > /out/build-info.json
+    && printf '{"variant":"glibc","libc":"glibc (host)","allocator":"glibc malloc","swift_stdlib":"static","build_image":"swift:6.4.0-resolute","build_flags":"-c release -Xswiftc -static-stdlib"}\n' > /out/build-info.json
 
 # ================================
 # musl-sdk
@@ -96,29 +96,26 @@ WORKDIR /build
 COPY Package.swift Package.resolved ./
 RUN swift package resolve
 COPY Sources ./Sources
-RUN swift build -c release --product BenchmarkServer \
-    && mkdir -p /out/lib /glibc \
+RUN swift build -c release --product BenchmarkServer -Xswiftc -static-stdlib \
+    && mkdir -p /out /glibc \
     && cp "$(swift build -c release --show-bin-path)/BenchmarkServer" /out/ \
-    && cp -a /usr/lib/swift/linux/*.so* /out/lib/ \
     && swift --version > /out/swift-version.txt 2>&1 \
-    && LD_LIBRARY_PATH=/out/lib ldd /out/BenchmarkServer \
+    && ldd /out/BenchmarkServer \
        | awk '$3 ~ /^\// && $3 !~ /^\/out\// { print $3 } $1 ~ /^\/.*ld-linux/ { print $1 }' \
        | xargs -I{} cp -L {} /glibc/ \
     && ls /glibc
 
 FROM build-glibc-noble AS build-glibc-noble-host
-RUN printf '{"variant":"glibc-noble","libc":"glibc (host)","allocator":"glibc malloc","swift_stdlib":"dynamic","build_image":"swift:6.4.0-noble","build_flags":"-c release"}\n' > /out/build-info.json
+RUN printf '{"variant":"glibc-noble","libc":"glibc (host)","allocator":"glibc malloc","swift_stdlib":"static","build_image":"swift:6.4.0-noble","build_flags":"-c release -Xswiftc -static-stdlib"}\n' > /out/build-info.json
 
 FROM build-glibc-noble AS build-glibc-noble-2.39
 RUN mv /glibc /out/glibc \
-    && printf '{"variant":"glibc-noble-2.39","libc":"glibc (bundled from noble)","allocator":"glibc malloc","swift_stdlib":"dynamic","build_image":"swift:6.4.0-noble","build_flags":"-c release"}\n' > /out/build-info.json
+    && printf '{"variant":"glibc-noble-2.39","libc":"glibc (bundled from noble)","allocator":"glibc malloc","swift_stdlib":"static","build_image":"swift:6.4.0-noble","build_flags":"-c release -Xswiftc -static-stdlib"}\n' > /out/build-info.json
 
 # ================================
 # glibc + jemalloc, built on Ubuntu 24.04 (noble)
 # ================================
-# Reproduces blindlog-api's Dockerfile before #379. If `-Xswiftc -static-stdlib` fails to link
-# (as `--static-swift-stdlib` does for Foundation with Swift 6.4.0), fall back to a dynamic
-# Swift runtime; build-info.json records which one was used.
+# Reproduces blindlog-api's Dockerfile before #379.
 FROM swift:6.4.0-noble AS build-glibc-jemalloc
 RUN apt-get -q update \
     && DEBIAN_FRONTEND=noninteractive apt-get -q install -y --no-install-recommends libjemalloc-dev \
@@ -127,23 +124,16 @@ WORKDIR /build
 COPY Package.swift Package.resolved ./
 RUN swift package resolve
 COPY Sources ./Sources
-RUN if swift build -c release --product BenchmarkServer -Xswiftc -static-stdlib -Xlinker -ljemalloc; then \
-      STDLIB=static; FLAGS="-c release -Xswiftc -static-stdlib -Xlinker -ljemalloc"; \
-    else \
-      echo "warning: -Xswiftc -static-stdlib failed to link; using a dynamic Swift runtime" >&2; \
-      STDLIB=dynamic; FLAGS="-c release -Xlinker -ljemalloc"; \
-      swift build -c release --product BenchmarkServer -Xlinker -ljemalloc; \
-    fi \
-    && mkdir -p /out/lib /out/glibc \
+RUN swift build -c release --product BenchmarkServer -Xswiftc -static-stdlib -Xlinker -ljemalloc \
+    && mkdir -p /out/glibc \
     && cp "$(swift build -c release --show-bin-path)/BenchmarkServer" /out/ \
-    && cp -a /usr/lib/swift/linux/*.so* /out/lib/ \
     && swift --version > /out/swift-version.txt 2>&1 \
-    && LD_LIBRARY_PATH=/out/lib ldd /out/BenchmarkServer \
+    && ldd /out/BenchmarkServer \
        | awk '$3 ~ /^\// && $3 !~ /^\/out\// { print $3 } $1 ~ /^\/.*ld-linux/ { print $1 }' \
        | xargs -I{} cp -L {} /out/glibc/ \
     && ls /out/glibc \
     && JEMALLOC="$(dpkg-query -W -f='${Version}' libjemalloc2)" \
-    && printf '{"variant":"glibc-noble-2.39-jemalloc","libc":"glibc (bundled from noble)","allocator":"jemalloc %s (Ubuntu libjemalloc2)","swift_stdlib":"%s","build_image":"swift:6.4.0-noble","build_flags":"%s"}\n' "$JEMALLOC" "$STDLIB" "$FLAGS" > /out/build-info.json
+    && printf '{"variant":"glibc-noble-2.39-jemalloc","libc":"glibc (bundled from noble)","allocator":"jemalloc %s (Ubuntu libjemalloc2)","swift_stdlib":"static","build_image":"swift:6.4.0-noble","build_flags":"-c release -Xswiftc -static-stdlib -Xlinker -ljemalloc"}\n' "$JEMALLOC" > /out/build-info.json
 
 # ================================
 # Export stages

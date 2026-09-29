@@ -32,7 +32,7 @@ env:
 jobs:
   benchmark:
     # All variants are built and measured in this single job so they share one runner VM.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4

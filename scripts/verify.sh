@@ -22,7 +22,8 @@ symbol_address() {
 # Expected allocator per variant: "glibc", or the mimalloc version that must be active.
 # musl-sdk: the Static Linux SDK replaces musl's allocator in libc.a with its bundled
 # mimalloc (swiftlang/swift-docker#488), so any mimalloc version other than ours is expected.
-MIMALLOC_VERSION=${MIMALLOC_VERSION:-v3.5.3}
+# The mimalloc version we link in is recorded by the Docker build.
+MIMALLOC_VERSION=$(grep -oE 'mimalloc v[0-9]+\.[0-9]+\.[0-9]+' "$BIN_DIR/musl-mimalloc-v3/build-info.json" | cut -d' ' -f2 || true)
 
 for variant in glibc musl-sdk musl-mimalloc-v3; do
   bin=$(server_binary "$variant")

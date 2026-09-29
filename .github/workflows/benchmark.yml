@@ -25,9 +25,12 @@ on:
   push:
     branches: [main]
 
+# One group per event and ref, so a push to main never cancels a full benchmark run started with
+# workflow_dispatch (or vice versa). Only superseded pull request runs are cancelled; other
+# runs of the same group wait for the running one to finish.
 concurrency:
-  group: benchmark-${{ github.ref }}
-  cancel-in-progress: true
+  group: benchmark-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   OHA_VERSION: v1.16.0

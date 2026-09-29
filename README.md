@@ -93,29 +93,81 @@ variant 名と実際の allocator が食い違っていてはベンチマーク�
 
 ## 結果
 
-条件の異なる runner で 3 回フル計測しました。いずれも x86_64、4 vCPU（サーバー 2 コア / oha 2 コア）、5 rep × 30 秒、median、エラー 0 件です。
+条件の異なる runner で 4 回フル計測しました。いずれも x86_64、4 vCPU（サーバー 2 コア / oha 2 コア）、5 rep × 30 秒、median、エラー 0 件です。
 
 | 計測日 | runner | CPU | host glibc | kernel | 全データ |
 |---|---|---|---|---|---|
+| 2026-09-29（jemalloc） | `ubuntu-26.04` | AMD EPYC 9V74 | 2.43（2.39 を同梱した variant で計測） | 7.0 | [`docs/results/2026-09-29-x86_64-jemalloc.md`](docs/results/2026-09-29-x86_64-jemalloc.md) |
 | 2026-09-29（glibc 切り分け） | `ubuntu-26.04` | Intel Xeon Platinum 8370C | 2.43（2.39 を同梱した variant あり） | 7.0 | [`docs/results/2026-09-29-x86_64-glibc-split.md`](docs/results/2026-09-29-x86_64-glibc-split.md) |
 | 2026-09-29 | `ubuntu-26.04` | AMD EPYC 7763 | 2.43 | 7.0 | [`docs/results/2026-09-29-x86_64-ubuntu26.md`](docs/results/2026-09-29-x86_64-ubuntu26.md) |
 | 2026-09-28 | `ubuntu-24.04` | AMD EPYC 9V45 | 2.39 | 6.17 | [`docs/results/2026-09-28-x86_64.md`](docs/results/2026-09-28-x86_64.md) |
 
-実行時の allocator はどの回も `glibc` = glibc malloc、`musl-sdk` = mimalloc v2.2.4（SDK 同梱）、`musl-mimalloc-v3` = mimalloc v3.5.3 でした。
+実行時の allocator はどの回も `glibc` 系 = glibc malloc、`glibc-noble-2.39-jemalloc` = jemalloc 5.3.0、`musl-sdk` = mimalloc v2.2.4（SDK 同梱）、`musl-mimalloc-v3` = mimalloc v3.5.3 でした。
+jemalloc の回だけは、全 variant の Swift runtime を静的リンクにしています（それ以前の回は glibc 系が動的リンク）。
 
 **まとめ**（この workload と runner の条件下での結果です）:
 
-- **3 回とも、Static Linux SDK（musl + mimalloc）版のスループットは glibc 版を下回りませんでした。**
-  allocation 系での musl 系の優位は CPU によって違い、EPYC 9V45 ではほぼ同等、Xeon 8370C で約 7%、EPYC 7763 で約 15% でした。
+- **移行前の本番構成（glibc 2.39 + jemalloc）と比べると、Static Linux SDK（musl + mimalloc）版は**
+  **allocation 系で約 2〜4% 低く、plaintext / json で約 1〜6% 高い**スループットでした（EPYC 9V74、jemalloc の回）。
+  allocation 系の差は rep 間のばらつき（stdev 0.6% 未満）より大きく、ノイズではありません。
+- **jemalloc は glibc malloc より、allocation 系で約 11〜13% 速く**、plaintext / json では差がありませんでした（同じ glibc 2.39・同じビルド方法）。
+- **glibc malloc と比べると、Static Linux SDK 版は 4 回とも下回りませんでした。**
+  allocation 系での優位は CPU によって違い、EPYC 9V45 ではほぼ同等、Xeon 8370C で約 7%、EPYC 9V74 で約 10%、EPYC 7763 で約 15% でした。
 - **glibc 2.39 → 2.43 の差は、allocation 系にはほとんど影響しませんでした**（±3% 以内）。
   一方 plaintext / json では 2.39 のほうが約 14% 速く（c≥10）、26.04 runner での plaintext / json の musl 系の優位の多くはこれで説明できます。
 - **ビルドイメージ（Ubuntu 24.04 と 26.04）による差はありませんでした**（±2% 以内）。
-- **p99 レイテンシは 3 回とも、c≥10 のとき musl 系のほうが低い**結果でした。
-- **RSS はどの回も musl 系が 6〜12 MB 多い**です。
+- **p99 レイテンシは 4 回とも、c≥10 のとき musl 系のほうが低い**結果でした。Swift runtime を静的リンクに揃えても、jemalloc にしても差は残ったので、
+  Swift runtime のリンク方式や allocator ではなく、libc（glibc と musl）の違いによるものと考えられます。
+- **RSS は musl 系が多く**、jemalloc 版と比べて約 13 MB、glibc malloc 版と比べて 6〜15 MB 多い結果でした。
 - SDK 同梱の mimalloc v2.2.4 と v3.5.3 の間には、意味のある差はありませんでした。
 
-blindlog-api#379 について: Swift 6.4.0 の Static Linux SDK は標準で mimalloc を使うため、「musl malloc に戻って遅くなる」という懸念は当たりません。
-3 回の計測のいずれでも、glibc からの移行によるスループット低下は確認されませんでした。
+blindlog-api#379 について: Swift 6.4.0 の Static Linux SDK は標準で mimalloc を使うため、「musl malloc に戻って大きく遅くなる」という懸念は当たりませんでした。
+ただし移行前の本番構成（jemalloc）と比べると、allocation の多い処理では数 % 遅く、メモリは 10 MB 余り多く使います。軽いリクエストはわずかに速く、p99 レイテンシは下がります。
+
+### 2026-09-29（jemalloc）: Ubuntu 26.04 / AMD EPYC 9V74
+
+[run 36576271295](https://github.com/zunda-pixel/swift-static-linux-benchmark/actions/runs/36576271295)、commit 62f3dae。
+[移行前の本番構成を再現する variant](#移行前の本番構成を再現する-variant-glibc-noble-239-jemalloc) を含む 3 variant を、同じ runner で計測しました。
+全 variant とも Swift runtime は静的リンクです。
+
+| Variant | 実行時の glibc | allocator |
+|---|---|---|
+| `glibc-noble-2.39` | 2.39（同梱） | glibc malloc |
+| `glibc-noble-2.39-jemalloc` | 2.39（同梱） | jemalloc 5.3.0（Ubuntu `libjemalloc2`） |
+| `musl-sdk` | —（static） | mimalloc v2.2.4（SDK 同梱） |
+
+`glibc-noble-2.39-jemalloc`（移行前の本番構成）に対する req/s の差（median）:
+
+| endpoint | variant | c=1 | c=10 | c=25 | c=50 | c=100 |
+|---|---|---:|---:|---:|---:|---:|
+| plaintext | glibc-noble-2.39 | +0.5% | +0.3% | +0.5% | −0.0% | +0.5% |
+| | musl-sdk | +2.8% | +4.9% | +5.2% | +3.9% | +6.2% |
+| json | glibc-noble-2.39 | +0.4% | −0.5% | −0.4% | +0.1% | +0.2% |
+| | musl-sdk | +1.2% | +4.1% | +2.2% | +1.2% | +1.6% |
+| allocation | glibc-noble-2.39 | −9.7% | −10.9% | −11.1% | −11.5% | −12.1% |
+| | musl-sdk | −4.7% | −1.9% | −2.1% | −2.1% | −2.0% |
+| parallel-allocation | glibc-noble-2.39 | −11.3% | −11.8% | −12.0% | −12.1% | −12.6% |
+| | musl-sdk | −4.3% | −4.1% | −3.9% | −4.1% | −4.3% |
+
+rep 間のばらつき（stdev）は、`musl-sdk` の plaintext c≥25（3〜6%）と jemalloc 版の plaintext / json の一部（2〜3%）を除いて 1.5% 未満です。
+
+p99 レイテンシ（ms、median、c=100）と RSS（MB、median、c=100）:
+
+| endpoint | glibc-noble-2.39 | glibc-noble-2.39-jemalloc | musl-sdk |
+|---|---:|---:|---:|
+| plaintext p99 | 7.81 | 7.85 | 4.00 |
+| json p99 | 6.85 | 6.95 | 4.30 |
+| allocation p99 | 66.95 | 44.93 | 39.03 |
+| parallel-allocation p99 | 275.50 | 221.06 | 220.74 |
+| allocation RSS | 28.8 | 30.3 | 43.4 |
+
+読み取れること:
+
+- **jemalloc と glibc malloc**（同じ glibc 2.39・同じビルド）: allocation / parallel-allocation で jemalloc が約 11〜13% 速く、plaintext / json は同等でした。
+- **musl-sdk（移行後）と jemalloc（移行前）**: allocation 系は jemalloc が約 2%（parallel-allocation は約 4%）速く、plaintext / json は musl-sdk が 1〜6% 速い結果でした。
+  allocation の c=1 だけは差が約 5% と大きくなっています。
+- p99 は plaintext / json で musl-sdk が jemalloc 版の約半分〜6 割、allocation 系でも musl-sdk が最も低い結果でした。
+- RSS は musl-sdk が約 43 MB で、jemalloc 版（約 30 MB）より約 13 MB 多くなりました。
 
 ### 2026-09-29（glibc 切り分け）: Ubuntu 26.04 / Intel Xeon Platinum 8370C
 
@@ -357,6 +409,6 @@ GitHub-hosted runner は共有 VM でノイズがあるため、rep 間の stdev
 - musl 本来の allocator（mallocng）を復元した variant を追加し、「musl malloc だった場合」との比較も行う
 - コア数の多い runner での計測（2 コアでは CPU が頭打ちになり、contention が見えにくい）
 - ARM64 runner での比較
-- p99 の差の原因の切り分け（glibc 系を Swift runtime 静的リンクにしたので、再計測で runtime の動的 / 静的の差を除いて比べられる）
+- p99 の差の原因の調査（Swift runtime のリンク方式と allocator は原因ではなかったので、libc の違いのどこが効いているかを `perf` などで調べる）
 - glibc 2.43 で plaintext / json が遅くなった原因の調査（`perf` で glibc 2.39 と 2.43 を比べる）
 - 差が出た条件で `perf stat` / `perf record` による解析（`futex`、`malloc` / `free`、lock 周辺）

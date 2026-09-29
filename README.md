@@ -31,7 +31,7 @@ musl では Ubuntu の jemalloc が使えないため musl 標準の malloc に�
 | `musl-sdk` | musl（静的） | mimalloc（SDK 同梱の版） | `swift build -c release --swift-sdk x86_64-swift-linux-musl` |
 | `musl-mimalloc-v3` | musl（静的） | mimalloc v3.5.3 | 上記 + `-Xlinker mimalloc.o` |
 
-- Swift 6.4.0（`swift:6.4.0-noble`）、Static Linux SDK `swift-6.4.0-RELEASE_static-linux-0.1.0`、mimalloc v3.5.3。
+- Swift 6.4.0（`swift:6.4.0-resolute`、Ubuntu 26.04）、Static Linux SDK `swift-6.4.0-RELEASE_static-linux-0.1.0`、mimalloc v3.5.3。
   バージョンは [`docker/Dockerfile`](docker/Dockerfile) の `ARG` で固定しています。
   SDK 同梱の mimalloc の版は `verify.sh` が実行時に読み取り、`environment.json` と Job Summary に記録します。
 - glibc 版は本来 `--static-swift-stdlib` で Swift runtime も静的リンクにしたいところですが、Swift 6.4.0 では Foundation がリンクできない（CoreFoundation のシンボルが未解決になる）ため、Swift runtime を動的リンクにして `bin/glibc/lib/` に同梱しています。
@@ -56,7 +56,7 @@ variant 名と実際の allocator が食い違っていてはベンチマーク�
 全データ: [`docs/results/2026-09-28-x86_64.md`](docs/results/2026-09-28-x86_64.md)
 （[run 36430825652](https://github.com/zunda-pixel/swift-static-linux-benchmark/actions/runs/36430825652)、commit 382dd85）
 
-- 条件: `ubuntu-24.04` runner（AMD EPYC 9V45、4 vCPU）、サーバー 2 コア / oha 2 コア、5 rep × 30 秒、median。エラー 0 件。
+- 条件: `ubuntu-24.04` runner（AMD EPYC 9V45、4 vCPU）、`swift:6.4.0-noble` でビルド（現在の設定は Ubuntu 26.04 に更新済み）、サーバー 2 コア / oha 2 コア、5 rep × 30 秒、median。エラー 0 件。
 - 実行時の allocator: `glibc` = glibc malloc、`musl-sdk` = mimalloc v2.2.4（SDK 同梱）、`musl-mimalloc-v3` = mimalloc v3.5.3。
 
 `glibc` に対する req/s の差（median）:
@@ -157,6 +157,21 @@ python3 scripts/summarize.py
 ```
 
 サーバー単体は macOS でも `swift run -c release BenchmarkServer` で起動できます（`PORT` / `HOST` 環境変数で変更可）。
+
+## 依存関係の更新
+
+[Dependabot](.github/dependabot.yml) が週次で以下の更新 PR を作ります。
+
+- GitHub Actions
+- Swift のベースイメージ（`docker/Dockerfile` の `FROM swift:…`）
+- Swift パッケージ（Hummingbird など、`Package.resolved`）
+
+以下は Dependabot の対象外なので、手動で更新します。
+
+- Static Linux SDK の `STATIC_SDK_URL` / `STATIC_SDK_CHECKSUM`（`docker/Dockerfile`）。toolchain と完全に同じバージョンが必要なので、
+  Swift イメージの更新 PR ではこれも合わせて更新してください（合っていないと musl 版のビルドが失敗します）。
+- mimalloc の `MIMALLOC_VERSION`（`docker/Dockerfile`）
+- oha の `OHA_VERSION`（`.github/workflows/benchmark.yml`）
 
 ## 結果の読み方
 

@@ -11,13 +11,14 @@
 #
 # The toolchain and SDK versions match zunda-pixel/blindlog-api#379.
 
-ARG SWIFT_IMAGE=swift:6.4.0-noble
 ARG MIMALLOC_VERSION=v3.5.3
 
 # ================================
 # Toolchain + Static Linux SDK + mimalloc.o
 # ================================
-FROM ${SWIFT_IMAGE} AS toolchain
+# The image is written out (not an ARG) so Dependabot can update it. The Static Linux SDK
+# below must match the toolchain version exactly; update STATIC_SDK_URL/CHECKSUM together.
+FROM swift:6.4.0-resolute AS toolchain
 
 ARG STATIC_SDK_URL=https://download.swift.org/swift-6.4.0-release/static-sdk/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz
 ARG STATIC_SDK_CHECKSUM=47d2fd89eebfdf9eb4d536b6710414297f755c17926cdebc4742c08982b40a9e

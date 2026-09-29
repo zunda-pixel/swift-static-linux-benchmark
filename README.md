@@ -51,6 +51,50 @@ variant 名と実際の allocator が食い違っていてはベンチマーク�
 3. 実行時（`MIMALLOC_VERBOSE=1`）: glibc 版は mimalloc の出力なし、`musl-mimalloc-v3` は v3.5.3、`musl-sdk` はそれ以外の版（SDK 同梱）
 4. 全 variant・全 endpoint が 200 を返す
 
+## 結果（2026-09-28、x86_64）
+
+全データ: [`docs/results/2026-09-28-x86_64.md`](docs/results/2026-09-28-x86_64.md)
+（[run 36430825652](https://github.com/zunda-pixel/swift-static-linux-benchmark/actions/runs/36430825652)、commit 382dd85）
+
+- 条件: `ubuntu-24.04` runner（AMD EPYC 9V45、4 vCPU）、サーバー 2 コア / oha 2 コア、5 rep × 30 秒、median。エラー 0 件。
+- 実行時の allocator: `glibc` = glibc malloc、`musl-sdk` = mimalloc v2.2.4（SDK 同梱）、`musl-mimalloc-v3` = mimalloc v3.5.3。
+
+`glibc` に対する req/s の差（median）:
+
+| endpoint | variant | c=1 | c=10 | c=25 | c=50 | c=100 |
+|---|---|---:|---:|---:|---:|---:|
+| plaintext | musl-sdk | +5.6% | +9.6% | +2.1% | +1.5% | +4.2% |
+| | musl-mimalloc-v3 | +6.1% | +9.4% | +5.2% | +3.2% | +1.9% |
+| json | musl-sdk | +4.2% | +9.1% | +1.6% | −1.4% | −1.3% |
+| | musl-mimalloc-v3 | +1.3% | +6.3% | −0.2% | −1.7% | +0.5% |
+| allocation | musl-sdk | −5.9% | −2.2% | −1.3% | −0.6% | −2.9% |
+| | musl-mimalloc-v3 | −2.9% | −0.4% | +1.5% | −1.5% | −3.1% |
+| parallel-allocation | musl-sdk | −3.1% | −0.9% | +1.1% | +1.7% | −1.1% |
+| | musl-mimalloc-v3 | +0.1% | −1.1% | +0.1% | +0.1% | −1.0% |
+
+p99 レイテンシ（ms、median）の例:
+
+| endpoint | c | glibc | musl-sdk | musl-mimalloc-v3 |
+|---|---:|---:|---:|---:|
+| plaintext | 100 | 6.52 | 2.77 | 2.81 |
+| json | 100 | 5.83 | 3.04 | 3.01 |
+| allocation | 100 | 49.55 | 30.63 | 31.51 |
+| parallel-allocation | 100 | 228.32 | 217.88 | 211.95 |
+
+読み取れること（この workload と runner の条件下での結果です）:
+
+- **スループットは 3 variant でほぼ同等**でした。差の多くは rep 間のばらつき（stdev 1〜5%）の範囲に収まっています。
+  plaintext / json は musl 系がやや高く、allocation 系は glibc がわずかに高い傾向ですが、ノイズと区別できるほどではありません。
+- **mimalloc の版**（SDK 同梱の v2.2.4 と v3.5.3）による意味のある差は見られませんでした。
+- **p99 レイテンシは c≥10 で musl 系が一貫して低く**、glibc のおよそ半分でした。スループットが同じなので、レイテンシのばらつきが小さいことになります。
+  原因（allocator か、Swift runtime の動的 / 静的リンクの違いか）は、この計測では特定できていません。
+- **RSS は musl 系が 7〜11 MB 多い**です（glibc 約 30 MB、musl 系 約 37〜45 MB）。
+- c≥10 ではどの variant もサーバーの 2 コアを使い切っており（CPU 約 200%）、スループットはそこで頭打ちです。
+  コア数の多い環境で allocator の lock contention が強く出るかどうかは、この計測では確かめられていません。
+
+blindlog-api#379 について: Swift 6.4.0 の Static Linux SDK は標準で mimalloc を使うため、「musl malloc に戻って遅くなる」という懸念は当たらず、
+この計測でも glibc からの移行によるスループット低下は確認されませんでした。
+
 ## Endpoints
 
 | Endpoint | 内容 | 目的 |
@@ -138,5 +182,7 @@ GitHub-hosted runner は共有 VM でノイズがあるため、rep 間の stdev
 
 - `glibc + jemalloc` を variant として追加（blindlog-api の移行前の本番構成の再現）
 - musl 本来の allocator（mallocng）を復元した variant を追加し、「musl malloc だった場合」との比較も行う
+- コア数の多い runner での計測（2 コアでは CPU が頭打ちになり、contention が見えにくい）
 - ARM64 runner での比較
+- p99 の差の原因の切り分け（glibc 版を Swift runtime 静的リンクにできれば、runtime の動的 / 静的の差を除ける）
 - 差が出た条件で `perf stat` / `perf record` による解析（`futex`、`malloc` / `free`、lock 周辺）

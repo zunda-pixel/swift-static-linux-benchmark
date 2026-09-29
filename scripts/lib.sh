@@ -9,15 +9,33 @@ server_binary() {
   echo "$BIN_DIR/$1/BenchmarkServer"
 }
 
+# Directory of a bundled glibc (glibc-noble-2.39), or empty when the host glibc is used.
+bundled_glibc_dir() {
+  local dir="$BIN_DIR/$1/glibc"
+  [[ -x "$dir/ld-linux-x86-64.so.2" ]] && echo "$dir" || true
+}
+
+# Command line that starts the server binary. glibc variants ship the Swift runtime shared
+# libraries in lib/ (found via LD_LIBRARY_PATH). A variant with a bundled glibc is started
+# through that glibc's dynamic loader, so the bundled libc.so.6 is used instead of the host's.
+server_command() {
+  local bin glibc
+  bin=$(server_binary "$1")
+  glibc=$(bundled_glibc_dir "$1")
+  if [[ -n "$glibc" ]]; then
+    echo "$glibc/ld-linux-x86-64.so.2 --library-path $BIN_DIR/$1/lib:$glibc $bin"
+  else
+    echo "$bin"
+  fi
+}
+
 # start_server <variant> <logfile> <cpu-list or ""> [VAR=value...]
 # Sets SERVER_PID.
 start_server() {
   local variant=$1 log=$2 cpus=${3:-}
   shift 3
-  local bin
-  bin=$(server_binary "$variant")
-  # The glibc variant ships the Swift runtime shared libraries in lib/.
-  local cmd=(env PORT="$PORT" LD_LIBRARY_PATH="$BIN_DIR/$variant/lib" "$@" "$bin")
+  local cmd=(env PORT="$PORT" LD_LIBRARY_PATH="$BIN_DIR/$variant/lib" "$@")
+  cmd+=($(server_command "$variant"))
   if [[ -n "$cpus" ]]; then
     cmd=(taskset -c "$cpus" "${cmd[@]}")
   fi

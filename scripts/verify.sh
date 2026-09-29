@@ -25,7 +25,21 @@ symbol_address() {
 # The mimalloc version we link in is recorded by the Docker build.
 MIMALLOC_VERSION=$(grep -oE 'mimalloc v[0-9]+\.[0-9]+\.[0-9]+' "$BIN_DIR/musl-mimalloc-v3/build-info.json" | cut -d' ' -f2 || true)
 
-for variant in glibc musl-sdk musl-mimalloc-v3; do
+# glibc version banner (first line of `libc.so.6` run as a program) of the libc a variant uses.
+glibc_banner() {
+  local glibc out
+  glibc=$(bundled_glibc_dir "$1")
+  if [[ -n "$glibc" ]]; then
+    out=$("$glibc/ld-linux-x86-64.so.2" --library-path "$glibc" "$glibc/libc.so.6" 2>&1 || true)
+  else
+    out=$(ldd --version 2>&1 || true)
+  fi
+  echo "${out%%$'\n'*}"
+}
+
+read -r -a VARIANTS <<<"${VARIANTS:-glibc glibc-noble glibc-noble-2.39 musl-sdk musl-mimalloc-v3}"
+
+for variant in "${VARIANTS[@]}"; do
   bin=$(server_binary "$variant")
   echo "== $variant ($bin)"
   if [[ ! -x "$bin" ]]; then
@@ -33,15 +47,23 @@ for variant in glibc musl-sdk musl-mimalloc-v3; do
     continue
   fi
   file_out=$(file "$bin")
-  ldd_out=$(LD_LIBRARY_PATH="$BIN_DIR/$variant/lib" ldd "$bin" 2>&1 || true)
+  glibc=$(bundled_glibc_dir "$variant")
+  if [[ -n "$glibc" ]]; then
+    ldd_out=$("$glibc/ld-linux-x86-64.so.2" --library-path "$BIN_DIR/$variant/lib:$glibc" --list "$bin" 2>&1 || true)
+    expected_libc="$glibc/libc.so.6"
+  else
+    ldd_out=$(LD_LIBRARY_PATH="$BIN_DIR/$variant/lib" ldd "$bin" 2>&1 || true)
+    expected_libc="/lib/x86_64-linux-gnu/libc.so.6"
+  fi
   symbols=$(nm "$bin" 2>/dev/null || true)
   echo "$file_out"
   echo "$ldd_out"
 
   case $variant in
-    glibc)
+    glibc*)
       if grep -q "dynamically linked" <<<"$file_out"; then pass "dynamically linked against glibc"; else fail "expected a dynamic executable"; fi
-      if grep -q "$BIN_DIR/glibc/lib/libswiftCore.so" <<<"$ldd_out"; then pass "Swift runtime resolves to the bundled lib/"; else fail "libswiftCore.so is not resolved from bin/glibc/lib"; fi
+      if grep -q "$BIN_DIR/$variant/lib/libswiftCore.so" <<<"$ldd_out"; then pass "Swift runtime resolves to the bundled lib/"; else fail "libswiftCore.so is not resolved from bin/$variant/lib"; fi
+      if grep -q "libc.so.6 => $expected_libc " <<<"$ldd_out"; then pass "libc.so.6 resolves to $expected_libc"; else fail "libc.so.6 does not resolve to $expected_libc"; fi
       if grep -q "not found" <<<"$ldd_out"; then fail "unresolved shared libraries"; else pass "all shared libraries resolved"; fi
       ;;
     *)
@@ -51,7 +73,7 @@ for variant in glibc musl-sdk musl-mimalloc-v3; do
 
   mi_malloc=$(symbol_address "$symbols" mi_malloc)
   malloc=$(symbol_address "$symbols" malloc)
-  if [[ $variant == glibc ]]; then
+  if [[ $variant == glibc* ]]; then
     if [[ -z "$mi_malloc" ]]; then pass "mimalloc is not linked"; else fail "unexpected mi_malloc symbol"; fi
   else
     if [[ -n "$mi_malloc" ]]; then pass "mimalloc is linked (mi_malloc @ $mi_malloc)"; else fail "mi_malloc symbol not found"; fi
@@ -66,11 +88,22 @@ for variant in glibc musl-sdk musl-mimalloc-v3; do
   log=$(mktemp)
   start_server "$variant" "$log" "" MIMALLOC_VERBOSE=1
   curl -sf "$BASE_URL/allocation" >/dev/null
+  maps=$(cat "/proc/$SERVER_PID/maps" 2>/dev/null || true)
   stop_server
   runtime_version=$(grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' "$log" | head -n 1 || true)
-  if [[ $variant == glibc ]]; then
+  if [[ $variant == glibc* ]]; then
     if grep -q "mimalloc" "$log"; then fail "mimalloc output from the glibc build"; else pass "no mimalloc output at runtime"; fi
-    echo "glibc malloc" >"$BIN_DIR/$variant/runtime-allocator.txt"
+    # The libc actually mapped into the running server process.
+    mapped_libc=$(awk '$6 ~ /libc\.so\.6$/ { print $6; exit }' <<<"$maps")
+    if [[ -n "$mapped_libc" && "$(realpath "$mapped_libc")" == "$(realpath "$expected_libc")" ]]; then
+      pass "running process uses $mapped_libc"
+    else
+      fail "running process uses ${mapped_libc:-no libc.so.6}, expected $expected_libc"
+    fi
+    banner=$(glibc_banner "$variant")
+    echo "  $banner"
+    version=$(grep -oE '[0-9]+\.[0-9]+(-[0-9A-Za-z.~+]+)?' <<<"${banner#*GLIBC }" | head -n 1 || true)
+    echo "glibc malloc (glibc ${version:-unknown})" >"$BIN_DIR/$variant/runtime-allocator.txt"
   else
     if [[ -n "$runtime_version" ]]; then pass "mimalloc $runtime_version active at runtime"; else fail "no mimalloc version in MIMALLOC_VERBOSE=1 output"; fi
     if [[ $variant == musl-mimalloc-v3 ]]; then

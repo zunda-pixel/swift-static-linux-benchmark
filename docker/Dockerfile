@@ -3,7 +3,10 @@
 # Builds the three benchmark variants. Each final stage contains only the binary and
 # build metadata, meant to be exported with `--output type=local,dest=bin/<variant>`:
 #
-#   glibc          Ubuntu glibc + glibc malloc, Swift runtime dynamically linked (bundled in lib/)
+#   glibc             Ubuntu 26.04 build, host glibc + glibc malloc, Swift runtime dynamically
+#                     linked (bundled in lib/)
+#   glibc-noble       same, but built on Ubuntu 24.04
+#   glibc-noble-2.39  Ubuntu 24.04 build that also bundles and runs with glibc 2.39
 #   musl-sdk          Swift Static Linux SDK as shipped, fully static. The SDK already replaces
 #                     musl's allocator in libc.a with mimalloc (swiftlang/swift-docker#488).
 #   musl-mimalloc-v3  Swift Static Linux SDK with our mimalloc v3 mimalloc.o linked in, which
@@ -50,7 +53,7 @@ RUN swift build -c release --product BenchmarkServer \
     && cp "$(swift build -c release --show-bin-path)/BenchmarkServer" /out/ \
     && cp -a /usr/lib/swift/linux/*.so* /out/lib/ \
     && swift --version > /out/swift-version.txt 2>&1 \
-    && printf '{"variant":"glibc","libc":"glibc","allocator":"glibc malloc","swift_stdlib":"dynamic","build_flags":"-c release"}\n' > /out/build-info.json
+    && printf '{"variant":"glibc","libc":"glibc (host)","allocator":"glibc malloc","swift_stdlib":"dynamic","build_image":"swift:6.4.0-resolute","build_flags":"-c release"}\n' > /out/build-info.json
 
 # ================================
 # musl-sdk
@@ -78,10 +81,45 @@ RUN SDK="$(uname -m)-swift-linux-musl" \
     && printf '{"variant":"musl-mimalloc-v3","libc":"musl","allocator":"mimalloc %s","swift_stdlib":"static","build_flags":"-c release --swift-sdk %s -Xlinker mimalloc.o"}\n' "$MIMALLOC_VERSION" "$SDK" > /out/build-info.json
 
 # ================================
+# glibc, built on Ubuntu 24.04 (noble)
+# ================================
+# Used to separate the effect of the glibc version from the build image and the CPU:
+#   glibc-noble       noble build, run against the host glibc
+#   glibc-noble-2.39  noble build, run with noble's glibc 2.39 bundled in glibc/ and started
+#                     through the bundled dynamic loader (see scripts/lib.sh)
+FROM swift:6.4.0-noble AS build-glibc-noble
+WORKDIR /build
+COPY Package.swift Package.resolved ./
+RUN swift package resolve
+COPY Sources ./Sources
+RUN swift build -c release --product BenchmarkServer \
+    && mkdir -p /out/lib /glibc \
+    && cp "$(swift build -c release --show-bin-path)/BenchmarkServer" /out/ \
+    && cp -a /usr/lib/swift/linux/*.so* /out/lib/ \
+    && swift --version > /out/swift-version.txt 2>&1 \
+    && LD_LIBRARY_PATH=/out/lib ldd /out/BenchmarkServer \
+       | awk '$3 ~ /^\// && $3 !~ /^\/out\// { print $3 } $1 ~ /^\/.*ld-linux/ { print $1 }' \
+       | xargs -I{} cp -L {} /glibc/ \
+    && ls /glibc
+
+FROM build-glibc-noble AS build-glibc-noble-host
+RUN printf '{"variant":"glibc-noble","libc":"glibc (host)","allocator":"glibc malloc","swift_stdlib":"dynamic","build_image":"swift:6.4.0-noble","build_flags":"-c release"}\n' > /out/build-info.json
+
+FROM build-glibc-noble AS build-glibc-noble-2.39
+RUN mv /glibc /out/glibc \
+    && printf '{"variant":"glibc-noble-2.39","libc":"glibc (bundled from noble)","allocator":"glibc malloc","swift_stdlib":"dynamic","build_image":"swift:6.4.0-noble","build_flags":"-c release"}\n' > /out/build-info.json
+
+# ================================
 # Export stages
 # ================================
 FROM scratch AS glibc
 COPY --from=build-glibc /out/ /
+
+FROM scratch AS glibc-noble
+COPY --from=build-glibc-noble-host /out/ /
+
+FROM scratch AS glibc-noble-2.39
+COPY --from=build-glibc-noble-2.39 /out/ /
 
 FROM scratch AS musl-sdk
 COPY --from=build-musl-sdk /out/ /

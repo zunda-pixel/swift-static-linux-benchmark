@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = "glibc"
-VARIANT_ORDER = ["glibc", "musl-sdk", "musl-mimalloc-v3"]
+VARIANT_ORDER = ["glibc", "glibc-noble", "glibc-noble-2.39", "musl-sdk", "musl-mimalloc-v3"]
 ENDPOINT_ORDER = ["plaintext", "json", "string", "array", "array-reserved", "allocation", "parallel-allocation"]
 
 
@@ -127,6 +127,8 @@ def markdown(summary, environment, config):
             lines.append(f"**Swift:** `{swift.splitlines()[0]}`")
         for name, info in environment.get("variants", {}).items():
             runtime = f", runtime: {info['runtime_allocator']}" if info.get("runtime_allocator") else ""
+            if info.get("build_image"):
+                runtime += f", built on `{info['build_image']}`"
             lines.append(f"- `{name}`: {info.get('libc')} + {info.get('allocator')}{runtime} (`{info.get('build_flags')}`)")
     if config:
         lines.append(

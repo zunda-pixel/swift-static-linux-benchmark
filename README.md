@@ -39,6 +39,25 @@ musl では Ubuntu の jemalloc が使えないため musl 標準の malloc に�
 - `musl-mimalloc-v3` は[公式の static override 方式](https://github.com/microsoft/mimalloc#static-override)に従い、
   `src/static.c` を musl sysroot 向けに `mimalloc.o` へコンパイルして最終リンクに渡しています（[`scripts/build-mimalloc.sh`](scripts/build-mimalloc.sh)）。
   object file として直接リンクされるため、`libc.a` 内の SDK 同梱 mimalloc より優先されます。
+
+### glibc のバージョン差を切り分けるための variant
+
+2026-09-28 と 09-29 の結果の違いが CPU によるものか glibc（2.39 → 2.43）によるものかを切り分けるため、
+Ubuntu 24.04 でビルドした glibc 版を 2 つ用意しています。どちらも同じバイナリです。
+
+| Variant | ビルドイメージ | 実行時の glibc | `glibc` との比較で分かること |
+|---|---|---|---|
+| `glibc` | `swift:6.4.0-resolute`（26.04） | host（26.04 runner では 2.43） | — |
+| `glibc-noble` | `swift:6.4.0-noble`（24.04） | host（2.43） | ビルドイメージの差 |
+| `glibc-noble-2.39` | `swift:6.4.0-noble`（24.04） | 同梱の 2.39 | `glibc-noble` との差 = glibc 2.39 と 2.43 の差 |
+
+`glibc-noble-2.39` はコンテナを使わず、Ubuntu 24.04 の `libc.so.6` などを `bin/glibc-noble-2.39/glibc/` に同梱し、
+同梱した動的ローダー（`ld-linux-x86-64.so.2 --library-path …`）経由でホスト上で起動します。
+これで同じ runner・同じ CPU のまま glibc のバージョンだけを変えられます。
+`verify.sh` は、実行中のプロセスに実際にどの `libc.so.6` がマップされているかと、その glibc のバージョンを確認します。
+
+これらは通常のフル計測には含まれません。`workflow_dispatch` の `variants` に指定して計測します
+（例: `glibc glibc-noble glibc-noble-2.39 musl-sdk`）。
 - glibc + jemalloc は意図的に含めていません。libc・allocator・static/dynamic の差が混ざるためです（第2フェーズ参照）。
 
 ### allocator が本当に想定どおりかの検証
@@ -202,7 +221,7 @@ GitHub-hosted runner は同じラベルでも実行ごとに CPU が変わるこ
 ### GitHub Actions
 
 - `pull_request` / `push`（main）: ビルド・検証と、短時間（1 rep、3 秒、concurrency `1 50`）の疎通確認のみ。
-- `workflow_dispatch`: フル計測。endpoint・concurrency・rep 数・時間を入力で変更できます。
+- `workflow_dispatch`: フル計測。variant・endpoint・concurrency・rep 数・時間を入力で変更できます。
 
 結果は Job Summary に表として出力され、生データは Artifact（`results/`）に保存されます。
 
@@ -273,5 +292,5 @@ GitHub-hosted runner は共有 VM でノイズがあるため、rep 間の stdev
 - コア数の多い runner での計測（2 コアでは CPU が頭打ちになり、contention が見えにくい）
 - ARM64 runner での比較
 - p99 の差の原因の切り分け（glibc 版を Swift runtime 静的リンクにできれば、runtime の動的 / 静的の差を除ける）
-- 09-28 と 09-29 の差の切り分け（同じ runner 上で、Ubuntu 24.04 と 26.04 のコンテナで glibc 版を動かし、glibc 2.39 と 2.43 を比べる）
+- 09-28 と 09-29 の差の切り分け（`glibc-noble` / `glibc-noble-2.39` variant で計測する）
 - 差が出た条件で `perf stat` / `perf record` による解析（`futex`、`malloc` / `free`、lock 周辺）

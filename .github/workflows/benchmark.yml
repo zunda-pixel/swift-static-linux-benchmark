@@ -35,12 +35,12 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 340
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build glibc
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
@@ -50,7 +50,7 @@ jobs:
           cache-to: type=gha,scope=benchmark,mode=max
 
       - name: Build musl-sdk
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
@@ -59,7 +59,7 @@ jobs:
           cache-from: type=gha,scope=benchmark
 
       - name: Build musl-mimalloc-v3
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
@@ -93,7 +93,7 @@ jobs:
         if: always()
         run: python3 scripts/summarize.py results | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: results-${{ github.run_id }}-${{ github.run_attempt }}

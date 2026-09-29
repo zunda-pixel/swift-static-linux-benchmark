@@ -7,7 +7,7 @@
 #
 # Configuration (environment variables):
 #   VARIANTS       default: "glibc musl-sdk musl-mimalloc-v3"
-#                  (also available: glibc-noble glibc-noble-2.39)
+#                  (also available: glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc)
 #   ENDPOINTS      default: "plaintext json allocation parallel-allocation"
 #   CONCURRENCIES  default: "1 10 25 50 100"
 #   REPS           default: 5

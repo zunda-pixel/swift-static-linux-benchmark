@@ -58,16 +58,35 @@ Ubuntu 24.04 でビルドした glibc 版を 2 つ用意しています。どち
 
 これらは通常のフル計測には含まれません。`workflow_dispatch` の `variants` に指定して計測します
 （例: `glibc glibc-noble glibc-noble-2.39 musl-sdk`）。
-- glibc + jemalloc は意図的に含めていません。libc・allocator・static/dynamic の差が混ざるためです（第2フェーズ参照）。
+
+### 移行前の本番構成を再現する variant: `glibc-noble-2.39-jemalloc`
+
+blindlog-api の #379 直前（commit eecd754）の Dockerfile と同じ構成です。
+
+| | 移行前の blindlog-api | `glibc-noble-2.39-jemalloc` |
+|---|---|---|
+| ビルドイメージ | `swift:6.4.0-noble` | `swift:6.4.0-noble` |
+| ビルド | `-Xswiftc -static-stdlib -Xlinker -ljemalloc` | 同じ（リンクできない場合は Swift runtime を動的リンクにし、`build-info.json` に記録） |
+| 実行時の glibc | `ubuntu:noble`（2.39） | 同梱の 2.39 |
+| jemalloc | Ubuntu の `libjemalloc2` | 同じパッケージの `libjemalloc.so.2` を同梱 |
+
+`glibc-noble-2.39` と同じ仕組みで、同梱した動的ローダー経由でホスト上で起動します。
+比べると次のことが分かります。
+
+- `musl-sdk` との比較: blindlog-api#379 の移行で、本番の性能がどう変わったか
+- `glibc-noble-2.39` との比較: 同じ glibc 2.39 での、glibc malloc と jemalloc の差（Swift runtime の静的 / 動的の差も含む）
+- allocation 系で `musl-sdk` とほぼ同じなら、musl 系の優位は allocator（glibc malloc と比べた新しい allocator）によるもの
 
 ### allocator が本当に想定どおりかの検証
 
 variant 名と実際の allocator が食い違っていてはベンチマーク全体が無意味になるため（実際に上記の前提違いはこれで見つかりました）、
 [`scripts/verify.sh`](scripts/verify.sh) で以下を確認し、失敗したら CI を落とします。
 
-1. `file` / `ldd`: musl 系は `statically linked`、glibc 版は同梱した `lib/` から Swift runtime が解決される
+1. `file` / `ldd`: musl 系は `statically linked`。glibc 系は Swift runtime が同梱した `lib/` から解決される（静的リンクでビルドした場合は依存がない）こと、
+   `libc.so.6` が想定したもの（host か同梱）に解決されること、jemalloc 版では `libjemalloc.so.2` が同梱したものに解決されること
 2. `nm`: musl 系では `malloc` のアドレスが `mi_malloc` と一致する。glibc 版には `mi_malloc` が無い
-3. 実行時（`MIMALLOC_VERBOSE=1`）: glibc 版は mimalloc の出力なし、`musl-mimalloc-v3` は v3.5.3、`musl-sdk` はそれ以外の版（SDK 同梱）
+3. 実行時（`MIMALLOC_VERBOSE=1`、`MALLOC_CONF=stats_print:true`）: glibc 系は mimalloc の出力なし、`musl-mimalloc-v3` は v3.5.3、`musl-sdk` はそれ以外の版（SDK 同梱）。
+   glibc 系は実行中のプロセスにマップされた `libc.so.6` とそのバージョンを確認し、jemalloc 版だけが `libjemalloc.so.2` をマップして jemalloc の統計を出力すること
 4. 全 variant・全 endpoint が 200 を返す
 
 ## 結果
@@ -333,7 +352,6 @@ GitHub-hosted runner は共有 VM でノイズがあるため、rep 間の stdev
 
 ## 第2フェーズ
 
-- `glibc + jemalloc` を variant として追加（blindlog-api の移行前の本番構成の再現）
 - musl 本来の allocator（mallocng）を復元した variant を追加し、「musl malloc だった場合」との比較も行う
 - コア数の多い runner での計測（2 コアでは CPU が頭打ちになり、contention が見えにくい）
 - ARM64 runner での比較

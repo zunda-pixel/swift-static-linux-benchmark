@@ -72,26 +72,70 @@ variant 名と実際の allocator が食い違っていてはベンチマーク�
 
 ## 結果
 
-条件の異なる runner で 2 回フル計測しました。どちらも x86_64、4 vCPU（サーバー 2 コア / oha 2 コア）、5 rep × 30 秒、median、エラー 0 件です。
+条件の異なる runner で 3 回フル計測しました。いずれも x86_64、4 vCPU（サーバー 2 コア / oha 2 コア）、5 rep × 30 秒、median、エラー 0 件です。
 
 | 計測日 | runner | CPU | host glibc | kernel | 全データ |
 |---|---|---|---|---|---|
+| 2026-09-29（glibc 切り分け） | `ubuntu-26.04` | Intel Xeon Platinum 8370C | 2.43（2.39 を同梱した variant あり） | 7.0 | [`docs/results/2026-09-29-x86_64-glibc-split.md`](docs/results/2026-09-29-x86_64-glibc-split.md) |
 | 2026-09-29 | `ubuntu-26.04` | AMD EPYC 7763 | 2.43 | 7.0 | [`docs/results/2026-09-29-x86_64-ubuntu26.md`](docs/results/2026-09-29-x86_64-ubuntu26.md) |
 | 2026-09-28 | `ubuntu-24.04` | AMD EPYC 9V45 | 2.39 | 6.17 | [`docs/results/2026-09-28-x86_64.md`](docs/results/2026-09-28-x86_64.md) |
 
-実行時の allocator はどちらの回も `glibc` = glibc malloc、`musl-sdk` = mimalloc v2.2.4（SDK 同梱）、`musl-mimalloc-v3` = mimalloc v3.5.3 でした。
+実行時の allocator はどの回も `glibc` = glibc malloc、`musl-sdk` = mimalloc v2.2.4（SDK 同梱）、`musl-mimalloc-v3` = mimalloc v3.5.3 でした。
 
 **まとめ**（この workload と runner の条件下での結果です）:
 
-- **どちらの回でも、Static Linux SDK（musl + mimalloc）版のスループットは glibc 版を下回りませんでした。**
-  09-28 はほぼ同等、09-29 は allocation 系で musl 系が約 15% 高い結果でした。
-- **p99 レイテンシは両方の回で、c≥10 のとき musl 系のほうが低い**結果でした。
-- **RSS は両方の回で musl 系が 6〜12 MB 多い**です。
-- SDK 同梱の mimalloc v2.2.4 と v3.5.3 の間には、どちらの回でも意味のある差はありませんでした。
-- 2 回で傾向が違った理由（CPU か、glibc 2.39 → 2.43 か）は、この計測では切り分けられていません（後述）。
+- **3 回とも、Static Linux SDK（musl + mimalloc）版のスループットは glibc 版を下回りませんでした。**
+  allocation 系での musl 系の優位は CPU によって違い、EPYC 9V45 ではほぼ同等、Xeon 8370C で約 7%、EPYC 7763 で約 15% でした。
+- **glibc 2.39 → 2.43 の差は、allocation 系にはほとんど影響しませんでした**（±3% 以内）。
+  一方 plaintext / json では 2.39 のほうが約 14% 速く（c≥10）、26.04 runner での plaintext / json の musl 系の優位の多くはこれで説明できます。
+- **ビルドイメージ（Ubuntu 24.04 と 26.04）による差はありませんでした**（±2% 以内）。
+- **p99 レイテンシは 3 回とも、c≥10 のとき musl 系のほうが低い**結果でした。
+- **RSS はどの回も musl 系が 6〜12 MB 多い**です。
+- SDK 同梱の mimalloc v2.2.4 と v3.5.3 の間には、意味のある差はありませんでした。
 
 blindlog-api#379 について: Swift 6.4.0 の Static Linux SDK は標準で mimalloc を使うため、「musl malloc に戻って遅くなる」という懸念は当たりません。
-2 回の計測のどちらでも、glibc からの移行によるスループット低下は確認されませんでした。
+3 回の計測のいずれでも、glibc からの移行によるスループット低下は確認されませんでした。
+
+### 2026-09-29（glibc 切り分け）: Ubuntu 26.04 / Intel Xeon Platinum 8370C
+
+[run 36532052783](https://github.com/zunda-pixel/swift-static-linux-benchmark/actions/runs/36532052783)、commit 10aa2e5。
+[glibc のバージョン差を切り分けるための variant](#glibc-のバージョン差を切り分けるための-variant) を含む 4 variant を、同じ runner で計測しました。
+
+| Variant | ビルドイメージ | 実行時の glibc | allocator |
+|---|---|---|---|
+| `glibc` | 26.04 | 2.43（host） | glibc malloc |
+| `glibc-noble` | 24.04 | 2.43（host） | glibc malloc |
+| `glibc-noble-2.39` | 24.04 | 2.39（同梱） | glibc malloc |
+| `musl-sdk` | 26.04 + Static Linux SDK | —（static） | mimalloc v2.2.4 |
+
+`glibc` に対する req/s の差（median）:
+
+| endpoint | variant | c=1 | c=10 | c=25 | c=50 | c=100 |
+|---|---|---:|---:|---:|---:|---:|
+| plaintext | glibc-noble | +0.6% | −0.6% | −0.4% | −0.3% | +0.0% |
+| | glibc-noble-2.39 | +6.6% | +15.2% | +13.9% | +14.0% | +13.5% |
+| | musl-sdk | +11.8% | +25.1% | +21.6% | +16.1% | +21.4% |
+| json | glibc-noble | +0.0% | −0.8% | +0.1% | +0.2% | −0.3% |
+| | glibc-noble-2.39 | +8.5% | +13.9% | +14.4% | +15.2% | +14.2% |
+| | musl-sdk | +15.0% | +24.5% | +23.5% | +22.4% | +22.6% |
+| allocation | glibc-noble | +1.8% | −1.0% | −1.2% | −1.1% | −1.0% |
+| | glibc-noble-2.39 | −0.1% | −2.3% | −2.8% | −2.9% | −2.6% |
+| | musl-sdk | +0.9% | +6.0% | +6.9% | +7.0% | +7.3% |
+| parallel-allocation | glibc-noble | −0.6% | −0.4% | −0.7% | −0.7% | −0.1% |
+| | glibc-noble-2.39 | −2.9% | −3.0% | −3.0% | −3.2% | −3.0% |
+| | musl-sdk | +7.0% | +5.8% | +5.9% | +5.9% | +6.8% |
+
+rep 間のばらつき（stdev）は、`musl-sdk` の plaintext c≥25（3〜5%）を除いて 2% 未満です。
+
+読み取れること:
+
+- **ビルドイメージの差（`glibc` と `glibc-noble`）はありません**でした（±2% 以内）。
+- **glibc のバージョン差（`glibc-noble` と `glibc-noble-2.39`）は、endpoint によって向きが逆**でした。
+  - plaintext / json: glibc 2.39 のほうが c≥10 で約 13〜16% 高い（c=1 では約 6〜8%）。allocation をほとんどしない処理で差が出ているので、malloc 以外の glibc の部分（システムコールのラッパー、文字列・メモリ操作、スレッド関連など）の差と考えられますが、どこかはこの計測では特定できていません。
+  - allocation / parallel-allocation: 逆に glibc 2.43 のほうが約 2〜3% 高い。
+- **musl-sdk は glibc 2.39 と比べても**、plaintext / json で 2〜9%、allocation / parallel-allocation で約 9〜10%（allocation の c=1 のみ 1%）高いスループットでした。
+  つまり allocation 系での musl 系の優位は glibc のバージョンでは説明できず、glibc malloc と mimalloc の差（と CPU との相性）によるものと考えられます。
+- p99 は musl-sdk が最も低く、glibc 系 3 つの間では大きな差はありませんでした。
 
 ### 2026-09-29: Ubuntu 26.04 / AMD EPYC 7763
 
@@ -168,9 +212,9 @@ p99 レイテンシ（ms、median）の例:
 - c≥10 ではどの variant もサーバーの 2 コアを使い切っており（CPU 約 200%）、スループットはそこで頭打ちです。
   コア数の多い環境で allocator の lock contention が強く出るかどうかは、この計測では確かめられていません。
 
-### 2 回の比較
+### 回をまたいだ比較
 
-09-28 から 09-29 で、スループットの絶対値は全体に下がりましたが、下がり方が variant によって違います（c=100 の req/s）。
+09-28（EPYC 9V45）から 09-29（EPYC 7763）で、スループットの絶対値は全体に下がりましたが、下がり方が variant によって違います（c=100 の req/s）。
 
 | endpoint | variant | 09-28 | 09-29 | 変化 |
 |---|---|---:|---:|---:|
@@ -184,7 +228,9 @@ p99 レイテンシ（ms、median）の例:
 plaintext は両者とも同じだけ下がっていて、これは CPU の違い（EPYC 9V45 → 7763）でおおむね説明できます。
 一方 allocation 系は glibc 版のほうが大きく下がっており、glibc malloc がこの環境で相対的に不利になったことを示しています。
 
-ただし 09-29 は CPU と glibc（2.39 → 2.43、glibc 版はビルドイメージも 26.04 に変更）が同時に変わっているため、どちらが原因かはこの 2 回からは判断できません。
+この 2 回は CPU と glibc（2.39 → 2.43）が同時に変わっていましたが、glibc 切り分けの計測では glibc 2.39 → 2.43 で allocation 系はほぼ変わらず（±3% 以内）、ビルドイメージの影響もありませんでした。
+したがって allocation 系で glibc 版が相対的に下がったのは、glibc のバージョンではなく CPU の違いによるものと考えられます。
+glibc malloc と mimalloc の相対的な速さは CPU によって変わり、今回の 3 種類では EPYC 9V45 でほぼ同等、Xeon 8370C で mimalloc が約 7%、EPYC 7763 で約 15% 速い結果でした。
 GitHub-hosted runner は同じラベルでも実行ごとに CPU が変わることがあるので、結果を比べるときは `environment.json` の CPU モデルも確認してください。
 
 ## Endpoints
@@ -292,5 +338,5 @@ GitHub-hosted runner は共有 VM でノイズがあるため、rep 間の stdev
 - コア数の多い runner での計測（2 コアでは CPU が頭打ちになり、contention が見えにくい）
 - ARM64 runner での比較
 - p99 の差の原因の切り分け（glibc 版を Swift runtime 静的リンクにできれば、runtime の動的 / 静的の差を除ける）
-- 09-28 と 09-29 の差の切り分け（`glibc-noble` / `glibc-noble-2.39` variant で計測する）
+- glibc 2.43 で plaintext / json が遅くなった原因の調査（`perf` で glibc 2.39 と 2.43 を比べる）
 - 差が出た条件で `perf stat` / `perf record` による解析（`futex`、`malloc` / `free`、lock 周辺）

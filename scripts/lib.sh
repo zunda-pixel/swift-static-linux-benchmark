@@ -15,8 +15,9 @@ bundled_glibc_dir() {
   [[ -x "$dir/ld-linux-x86-64.so.2" ]] && echo "$dir" || true
 }
 
-# Command line that starts the server binary. glibc variants ship the Swift runtime shared
-# libraries in lib/ (found via LD_LIBRARY_PATH). A variant with a bundled glibc is started
+# Command line that starts the server binary. Shared libraries a variant ships in lib/ are
+# found via LD_LIBRARY_PATH (currently none: every variant links the Swift runtime
+# statically). A variant with a bundled glibc is started
 # through that glibc's dynamic loader, so the bundled libc.so.6 is used instead of the host's.
 server_command() {
   local bin glibc

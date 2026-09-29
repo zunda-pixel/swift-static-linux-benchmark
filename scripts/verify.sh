@@ -37,7 +37,7 @@ glibc_banner() {
   echo "${out%%$'\n'*}"
 }
 
-read -r -a VARIANTS <<<"${VARIANTS:-glibc glibc-noble glibc-noble-2.39 musl-sdk musl-mimalloc-v3}"
+read -r -a VARIANTS <<<"${VARIANTS:-glibc glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-sdk musl-mimalloc-v3}"
 
 for variant in "${VARIANTS[@]}"; do
   bin=$(server_binary "$variant")
@@ -62,7 +62,17 @@ for variant in "${VARIANTS[@]}"; do
   case $variant in
     glibc*)
       if grep -q "dynamically linked" <<<"$file_out"; then pass "dynamically linked against glibc"; else fail "expected a dynamic executable"; fi
-      if grep -q "$BIN_DIR/$variant/lib/libswiftCore.so" <<<"$ldd_out"; then pass "Swift runtime resolves to the bundled lib/"; else fail "libswiftCore.so is not resolved from bin/$variant/lib"; fi
+      if grep -q '"swift_stdlib":"static"' "$BIN_DIR/$variant/build-info.json"; then
+        if grep -q "libswiftCore" <<<"$ldd_out"; then fail "Swift runtime is linked dynamically, expected static"; else pass "Swift runtime is linked statically"; fi
+      else
+        if grep -q "$BIN_DIR/$variant/lib/libswiftCore.so" <<<"$ldd_out"; then pass "Swift runtime resolves to the bundled lib/"; else fail "libswiftCore.so is not resolved from bin/$variant/lib"; fi
+      fi
+      resolved_jemalloc=$(awk '$1 == "libjemalloc.so.2" { print $3; exit }' <<<"$ldd_out")
+      if [[ $variant == *jemalloc ]]; then
+        if [[ -n "$resolved_jemalloc" && "$resolved_jemalloc" == "$glibc/"* ]]; then pass "libjemalloc.so.2 resolves to $resolved_jemalloc"; else fail "libjemalloc.so.2 resolves to ${resolved_jemalloc:-nothing}, expected the bundled one"; fi
+      elif [[ -n "$resolved_jemalloc" ]]; then
+        fail "unexpected libjemalloc.so.2 dependency"
+      fi
       resolved_libc=$(awk '$1 == "libc.so.6" { print $3; exit }' <<<"$ldd_out")
       if [[ -n "$resolved_libc" && "$(realpath "$resolved_libc")" == "$(realpath "$expected_libc")" ]]; then
         pass "libc.so.6 resolves to $resolved_libc"
@@ -91,7 +101,7 @@ for variant in "${VARIANTS[@]}"; do
 
   # Runtime check: mimalloc prints its version and options to stderr when MIMALLOC_VERBOSE=1.
   log=$(mktemp)
-  start_server "$variant" "$log" "" MIMALLOC_VERBOSE=1
+  start_server "$variant" "$log" "" MIMALLOC_VERBOSE=1 MALLOC_CONF=stats_print:true
   curl -sf "$BASE_URL/allocation" >/dev/null
   maps=$(cat "/proc/$SERVER_PID/maps" 2>/dev/null || true)
   stop_server
@@ -105,10 +115,23 @@ for variant in "${VARIANTS[@]}"; do
     else
       fail "running process uses ${mapped_libc:-no libc.so.6}, expected $expected_libc"
     fi
+    # jemalloc prints its statistics at exit when MALLOC_CONF=stats_print:true.
+    jemalloc_version=$(grep -oE '^Version: "[^"]+"' "$log" | head -n 1 | cut -d'"' -f2 || true)
+    if [[ $variant == *jemalloc ]]; then
+      if grep -q "libjemalloc.so.2" <<<"$maps"; then pass "running process maps libjemalloc.so.2"; else fail "libjemalloc.so.2 is not mapped in the running process"; fi
+      if grep -q "jemalloc statistics" "$log"; then pass "jemalloc ${jemalloc_version:-?} active at runtime"; else fail "no jemalloc statistics with MALLOC_CONF=stats_print:true"; fi
+    else
+      if grep -q "libjemalloc" <<<"$maps"; then fail "unexpected libjemalloc mapping"; fi
+      if grep -q "jemalloc statistics" "$log"; then fail "jemalloc output from a non-jemalloc build"; else pass "no jemalloc output at runtime"; fi
+    fi
     banner=$(glibc_banner "$variant")
     echo "  $banner"
     version=$(grep -oE '[0-9]+\.[0-9]+(-[0-9A-Za-z.~+]+)?' <<<"${banner#*GLIBC }" | head -n 1 || true)
-    echo "glibc malloc (glibc ${version:-unknown})" >"$BIN_DIR/$variant/runtime-allocator.txt"
+    if [[ $variant == *jemalloc ]]; then
+      echo "jemalloc ${jemalloc_version:-unknown} (glibc ${version:-unknown})" >"$BIN_DIR/$variant/runtime-allocator.txt"
+    else
+      echo "glibc malloc (glibc ${version:-unknown})" >"$BIN_DIR/$variant/runtime-allocator.txt"
+    fi
   else
     if [[ -n "$runtime_version" ]]; then pass "mimalloc $runtime_version active at runtime"; else fail "no mimalloc version in MIMALLOC_VERBOSE=1 output"; fi
     if [[ $variant == musl-mimalloc-v3 ]]; then

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       variants:
-        description: Variants to benchmark (space separated; also glibc-noble glibc-noble-2.39)
+        description: Variants to benchmark (space separated; also glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc)
         default: glibc musl-sdk musl-mimalloc-v3
       endpoints:
         description: Endpoints to benchmark (space separated)
@@ -90,6 +90,17 @@ jobs:
           outputs: type=local,dest=bin/glibc-noble
           cache-from: type=gha,scope=benchmark-noble
 
+      # blindlog-api's production setup before #379.
+      - name: Build glibc-noble-2.39-jemalloc
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: glibc-noble-2.39-jemalloc
+          outputs: type=local,dest=bin/glibc-noble-2.39-jemalloc
+          cache-from: type=gha,scope=benchmark-jemalloc
+          cache-to: type=gha,scope=benchmark-jemalloc,mode=max
+
       - name: Install oha
         run: |
           sudo curl -fsSL -o /usr/local/bin/oha "https://github.com/hatoo/oha/releases/download/${OHA_VERSION}/oha-linux-amd64"
@@ -105,7 +116,7 @@ jobs:
       - name: Benchmark
         env:
           # Pull requests and pushes run a short smoke benchmark; full runs are manual.
-          VARIANTS: ${{ github.event_name == 'workflow_dispatch' && inputs.variants || 'glibc glibc-noble glibc-noble-2.39 musl-sdk musl-mimalloc-v3' }}
+          VARIANTS: ${{ github.event_name == 'workflow_dispatch' && inputs.variants || 'glibc glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-sdk musl-mimalloc-v3' }}
           ENDPOINTS: ${{ github.event_name == 'workflow_dispatch' && inputs.endpoints || 'plaintext json allocation parallel-allocation' }}
           CONCURRENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrencies || '1 50' }}
           REPS: ${{ github.event_name == 'workflow_dispatch' && inputs.reps || '1' }}

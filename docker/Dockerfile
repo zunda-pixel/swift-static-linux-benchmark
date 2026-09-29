@@ -7,6 +7,10 @@
 #                     linked (bundled in lib/)
 #   glibc-noble       same, but built on Ubuntu 24.04
 #   glibc-noble-2.39  Ubuntu 24.04 build that also bundles and runs with glibc 2.39
+#   glibc-noble-2.39-jemalloc
+#                     blindlog-api's production setup before #379: Ubuntu 24.04 build with
+#                     -Xswiftc -static-stdlib -Xlinker -ljemalloc, run with glibc 2.39 and
+#                     Ubuntu's libjemalloc2 (both bundled in glibc/)
 #   musl-sdk          Swift Static Linux SDK as shipped, fully static. The SDK already replaces
 #                     musl's allocator in libc.a with mimalloc (swiftlang/swift-docker#488).
 #   musl-mimalloc-v3  Swift Static Linux SDK with our mimalloc v3 mimalloc.o linked in, which
@@ -110,6 +114,38 @@ RUN mv /glibc /out/glibc \
     && printf '{"variant":"glibc-noble-2.39","libc":"glibc (bundled from noble)","allocator":"glibc malloc","swift_stdlib":"dynamic","build_image":"swift:6.4.0-noble","build_flags":"-c release"}\n' > /out/build-info.json
 
 # ================================
+# glibc + jemalloc, built on Ubuntu 24.04 (noble)
+# ================================
+# Reproduces blindlog-api's Dockerfile before #379. If `-Xswiftc -static-stdlib` fails to link
+# (as `--static-swift-stdlib` does for Foundation with Swift 6.4.0), fall back to a dynamic
+# Swift runtime; build-info.json records which one was used.
+FROM swift:6.4.0-noble AS build-glibc-jemalloc
+RUN apt-get -q update \
+    && DEBIAN_FRONTEND=noninteractive apt-get -q install -y --no-install-recommends libjemalloc-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY Package.swift Package.resolved ./
+RUN swift package resolve
+COPY Sources ./Sources
+RUN if swift build -c release --product BenchmarkServer -Xswiftc -static-stdlib -Xlinker -ljemalloc; then \
+      STDLIB=static; FLAGS="-c release -Xswiftc -static-stdlib -Xlinker -ljemalloc"; \
+    else \
+      echo "warning: -Xswiftc -static-stdlib failed to link; using a dynamic Swift runtime" >&2; \
+      STDLIB=dynamic; FLAGS="-c release -Xlinker -ljemalloc"; \
+      swift build -c release --product BenchmarkServer -Xlinker -ljemalloc; \
+    fi \
+    && mkdir -p /out/lib /out/glibc \
+    && cp "$(swift build -c release --show-bin-path)/BenchmarkServer" /out/ \
+    && cp -a /usr/lib/swift/linux/*.so* /out/lib/ \
+    && swift --version > /out/swift-version.txt 2>&1 \
+    && LD_LIBRARY_PATH=/out/lib ldd /out/BenchmarkServer \
+       | awk '$3 ~ /^\// && $3 !~ /^\/out\// { print $3 } $1 ~ /^\/.*ld-linux/ { print $1 }' \
+       | xargs -I{} cp -L {} /out/glibc/ \
+    && ls /out/glibc \
+    && JEMALLOC="$(dpkg-query -W -f='${Version}' libjemalloc2)" \
+    && printf '{"variant":"glibc-noble-2.39-jemalloc","libc":"glibc (bundled from noble)","allocator":"jemalloc %s (Ubuntu libjemalloc2)","swift_stdlib":"%s","build_image":"swift:6.4.0-noble","build_flags":"%s"}\n' "$JEMALLOC" "$STDLIB" "$FLAGS" > /out/build-info.json
+
+# ================================
 # Export stages
 # ================================
 FROM scratch AS glibc
@@ -120,6 +156,9 @@ COPY --from=build-glibc-noble-host /out/ /
 
 FROM scratch AS glibc-noble-2.39
 COPY --from=build-glibc-noble-2.39 /out/ /
+
+FROM scratch AS glibc-noble-2.39-jemalloc
+COPY --from=build-glibc-jemalloc /out/ /
 
 FROM scratch AS musl-sdk
 COPY --from=build-musl-sdk /out/ /

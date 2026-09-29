@@ -35,7 +35,8 @@ musl では Ubuntu の jemalloc が使えないため musl 標準の malloc に�
   バージョンは [`docker/Dockerfile`](docker/Dockerfile) の `ARG` で固定しています。
   SDK 同梱の mimalloc の版は `verify.sh` が実行時に読み取り、`environment.json` と Job Summary に記録します。
 - glibc 系の variant はすべて `-Xswiftc -static-stdlib` で Swift runtime（Foundation を含む）を静的リンクしています。musl 系も Swift runtime は静的なので、両者の差は libc と allocator（とリンク方式）に絞られます。
-  SwiftPM の `--static-swift-stdlib` は Swift 6.4.0 では Foundation がリンクできない（CoreFoundation のシンボルが未解決になる）ため使っていません。
+  SwiftPM の `--static-swift-stdlib` は、Swift 6.4.0 のデフォルトのビルドシステム（swiftbuild）では Foundation がリンクできない（CoreFoundation のシンボルが未解決になる）ため使っていません
+  （[swiftlang/swift-package-manager#10592](https://github.com/swiftlang/swift-package-manager/issues/10592)）。
   **2026-09-28 / 09-29 の結果は、glibc 系の Swift runtime を動的リンクにしていた時点のもの**です。
 - `musl-mimalloc-v3` は[公式の static override 方式](https://github.com/microsoft/mimalloc#static-override)に従い、
   `src/static.c` を musl sysroot 向けに `mimalloc.o` へコンパイルして最終リンクに渡しています（[`scripts/build-mimalloc.sh`](scripts/build-mimalloc.sh)）。

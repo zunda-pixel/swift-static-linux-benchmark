@@ -51,7 +51,8 @@ COPY Sources ./Sources
 FROM source AS build-glibc
 # The Swift runtime (including Foundation) is linked statically with `-Xswiftc -static-stdlib`,
 # as blindlog-api did before #379. SwiftPM's `--static-swift-stdlib` fails to link Foundation
-# with Swift 6.4.0 (unresolved CoreFoundation symbols from libFoundation.a), but this works.
+# with Swift 6.4.0's default swiftbuild build system (unresolved CoreFoundation symbols from
+# libFoundation.a; swiftlang/swift-package-manager#10592), but this works.
 RUN swift build -c release --product BenchmarkServer -Xswiftc -static-stdlib \
     && mkdir -p /out \
     && cp "$(swift build -c release --show-bin-path)/BenchmarkServer" /out/ \

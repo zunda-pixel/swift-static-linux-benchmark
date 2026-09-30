@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-void *fast_memcpy(void *restrict dst, const void *restrict src, size_t n);
+void *fast_memcpy(void *dst, const void *src, size_t n);
 
 enum { MAX = 2048, PAD = 64 };
 

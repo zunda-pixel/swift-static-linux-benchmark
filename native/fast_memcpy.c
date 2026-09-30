@@ -29,7 +29,9 @@ typedef char v32 __attribute__((vector_size(32), aligned(1), may_alias));
 
 // Every path loads before it stores, or copies strictly forward, so the function is also a
 // correct forward copy for overlapping buffers with dst < src (what __memcpy_fwd must be).
-void *MEMCPY_NAME(void *restrict dst, const void *restrict src, size_t n) {
+// The parameters are deliberately not `restrict`: that would let the compiler reorder the
+// stores before the loads, which breaks overlapping forward copies.
+void *MEMCPY_NAME(void *dst, const void *src, size_t n) {
   char *d = dst;
   const char *s = src;
 

@@ -33,6 +33,16 @@ STAT_COLUMNS = [
     ("page faults/req", "page-faults", 1),
 ]
 
+# Symbols counted as allocator or memory-copy work in the CPU share table. musl variants link libc
+# (and mimalloc) into the executable, so their share can only be seen by symbol, not by DSO.
+ALLOCATOR_DSOS = ("libjemalloc.so.2",)
+ALLOCATOR_SYMBOL = re.compile(
+    r"^(malloc|free|cfree|calloc|realloc|reallocarray|posix_memalign|aligned_alloc|memalign|valloc"
+    r"|malloc_usable_size|sdallocx|__libc_(malloc|free|calloc|realloc)|_int_(malloc|free|realloc)\w*"
+    r"|malloc_consolidate|tcache\w*|unlink_chunk|arena_get2|_?mi_\w+|je_\w+|operator (new|delete)\b.*)"
+)
+MEMORY_SYMBOL = re.compile(r"^_*(memcpy|memmove|memset|memcmp|bcmp)\w*")
+
 PERCENT_LINE = re.compile(r"^\s*([0-9.]+)%\s+(\S+)(?:\s+\[[.k]\]\s+(.*))?$")
 
 
@@ -65,13 +75,27 @@ def parse_report(path, limit):
     if not path.exists():
         return rows
     for line in path.read_text().splitlines():
-        match = PERCENT_LINE.match(line)
+        match = PERCENT_LINE.match(line.rstrip())
         if match:
             percent, dso, symbol = match.groups()
             rows.append({"percent": float(percent), "dso": dso, "symbol": symbol})
         if len(rows) >= limit:
             break
     return rows
+
+
+def cpu_share(symbols, dsos):
+    """Percent of CPU samples in allocator functions, memory-copy functions, and the kernel."""
+    allocator = sum(r["percent"] for r in symbols
+                    if r["dso"] in ALLOCATOR_DSOS or ALLOCATOR_SYMBOL.match(r["symbol"] or ""))
+    memory = sum(r["percent"] for r in symbols
+                 if r["dso"] not in ALLOCATOR_DSOS and MEMORY_SYMBOL.match(r["symbol"] or ""))
+    kernel = sum(r["percent"] for r in dsos if r["dso"].startswith("["))
+    # Samples in libc.so.6 that perf could not name (internal functions of a stripped libc,
+    # mostly malloc internals in allocation-heavy endpoints).
+    libc_unnamed = sum(r["percent"] for r in symbols
+                       if r["dso"] == "libc.so.6" and (r["symbol"] or "").startswith("0x"))
+    return {"allocator": allocator, "memory": memory, "libc_unnamed": libc_unnamed, "kernel": kernel}
 
 
 def per_request(counters, event, scale, reqs):
@@ -116,6 +140,8 @@ def main():
                 "per_request": {label: per_request(counters, event, scale, reqs) for label, event, scale in STAT_COLUMNS},
                 "dso": parse_report(directory / "dso.txt", 8),
                 "symbols": parse_report(directory / "symbols.txt", 20),
+                "share": cpu_share(parse_report(directory / "symbols.txt", 10_000),
+                                   parse_report(directory / "dso.txt", 100)),
             }
         )
     (profile_dir / "summary.json").write_text(
@@ -151,6 +177,18 @@ def main():
                 continue
             row = [variant, fmt(e["rps"])] + [fmt(e["per_request"][label]) for label, _, _ in STAT_COLUMNS]
             lines.append("| " + " | ".join(row) + " |")
+        lines.append("")
+
+        lines.append("CPU share (% of samples):\n")
+        lines.append("| variant | allocator | memcpy / memmove / memset | libc.so.6 without symbol name | kernel |")
+        lines.append("|---|---:|---:|---:|---:|")
+        for variant in variants:
+            e = index.get((variant, endpoint))
+            if e is None:
+                continue
+            share = e["share"]
+            lines.append(f"| {variant} | {share['allocator']:.1f}% | {share['memory']:.1f}% | "
+                         f"{share['libc_unnamed']:.1f}% | {share['kernel']:.1f}% |")
         lines.append("")
 
         lines.append("CPU time by shared object (% of samples):\n")

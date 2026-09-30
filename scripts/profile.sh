@@ -29,6 +29,9 @@ WARMUP=${WARMUP:-5}
 DURATION=${DURATION:-20}
 PERF=${PERF:-perf}
 OHA=${OHA:-oha}
+# Ubuntu's libc.so.6 only exports public symbols; debuginfod lets perf report name internal
+# functions such as _int_malloc (if perf was built with debuginfod support).
+export DEBUGINFOD_URLS=${DEBUGINFOD_URLS:-https://debuginfod.ubuntu.com}
 OUT=${RESULTS_DIR:-$ROOT/results}/profile
 
 NPROC=$(nproc)
@@ -111,7 +114,7 @@ for variant in "${VARIANTS[@]}"; do
     sudo chown "$(id -u):$(id -g)" "$dir/perf.data"
 
     "$PERF" report -i "$dir/perf.data" --stdio --no-children --sort dso --percent-limit 0.5 2>/dev/null >"$dir/dso.txt" || true
-    "$PERF" report -i "$dir/perf.data" --stdio --no-children --sort dso,sym --percent-limit 0.3 2>/dev/null \
+    "$PERF" report -i "$dir/perf.data" --stdio --no-children --sort dso,sym --percent-limit 0 2>/dev/null \
       | demangle >"$dir/symbols.txt" || true
     echo "  $endpoint done"
   done

@@ -40,11 +40,12 @@ on:
   push:
     branches: [main]
 
-# One group per event and ref, so a push to main never cancels a full benchmark run started with
-# workflow_dispatch (or vice versa). Only superseded pull request runs are cancelled; other
-# runs of the same group wait for the running one to finish.
+# Pull request and push runs are grouped per event and ref: superseded pull request runs are
+# cancelled, and pushes wait for the running one. Manually dispatched runs each get their own group
+# (by run id): they run on separate VMs, and sharing a group would cancel all but the newest of the
+# runs waiting in it.
 concurrency:
-  group: benchmark-${{ github.event_name }}-${{ github.ref }}
+  group: benchmark-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -113,9 +114,19 @@ jobs:
           sudo apt-get -q update
           sudo apt-get -q install -y linux-tools-common "linux-tools-$(uname -r)" \
             || sudo apt-get -q install -y linux-tools-common linux-tools-azure linux-tools-generic
-          # The perf wrapper refuses to run when no tools match the running kernel exactly;
-          # use the newest installed perf binary directly.
-          perf_bin=$(ls -d /usr/lib/linux-tools*/*/perf /usr/lib/linux-tools/*/perf 2>/dev/null | sort -V | tail -n 1)
+          # Prefer the perf wrapper; if it cannot find tools for the running kernel, use a perf
+          # binary from the installed linux-tools packages directly.
+          if perf --version >/dev/null 2>&1; then
+            perf_bin=$(command -v perf)
+          else
+            perf_bin=$(dpkg -L $(dpkg -l 'linux-*tools-*' | awk '/^ii/ { print $2 }') 2>/dev/null \
+              | grep -E '/perf$' | while read -r f; do [[ -x "$f" && ! -d "$f" ]] && echo "$f"; done | sort -V | tail -n 1)
+          fi
+          if [[ -z "$perf_bin" ]]; then
+            echo "perf not found; installed tools packages:" >&2
+            dpkg -l 'linux-*tools-*' >&2 || true
+            exit 1
+          fi
           echo "PERF=$perf_bin" >> "$GITHUB_ENV"
           sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
           "$perf_bin" --version

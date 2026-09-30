@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds all variants with Docker and exports them to bin/<variant>/.
-# The binaries target linux/amd64 (the GitHub Actions runner), also when run on macOS.
+# The binaries target linux/amd64 by default (PLATFORM=linux/arm64 for ARM64), also on macOS.
 #
 # Usage: scripts/build.sh [variant...]   (default: all variants)
 set -euo pipefail

@@ -3,3 +3,4 @@
 /.swiftpm
 /bin
 /results
+__pycache__/

@@ -1,7 +1,8 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # The composite action in .github/actions is not scanned from "/".
+    directories: ["/", "/.github/actions/*"]
     schedule:
       interval: weekly
     groups:

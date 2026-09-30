@@ -3,6 +3,21 @@ name: benchmark
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: benchmark (oha measurements) or profile (perf stat / perf record per variant)
+        type: choice
+        options: [benchmark, profile]
+        default: benchmark
+      runner:
+        description: Runner (x64 or ARM64)
+        type: choice
+        options: [ubuntu-26.04, ubuntu-26.04-arm]
+        default: ubuntu-26.04
+      cpu_configs:
+        description: >-
+          Server:client CPU lists, measured one after another in the same job (e.g. "0:1-3 0-1:2-3 0-2:3").
+          Empty splits the CPUs in half. Profile mode uses the first one.
+        default: ""
       variants:
         description: Variants to benchmark (space separated; also glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc)
         default: glibc musl-sdk musl-mimalloc-v3
@@ -38,75 +53,17 @@ env:
 jobs:
   benchmark:
     # All variants are built and measured in this single job so they share one runner VM.
-    runs-on: ubuntu-26.04
+    runs-on: ${{ inputs.runner || 'ubuntu-26.04' }}
     timeout-minutes: 340
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v4
-
-      - name: Build glibc
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/Dockerfile
-          target: glibc
-          outputs: type=local,dest=bin/glibc
-          cache-from: type=gha,scope=benchmark
-          cache-to: type=gha,scope=benchmark,mode=max
-
-      - name: Build musl-sdk
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/Dockerfile
-          target: musl-sdk
-          outputs: type=local,dest=bin/musl-sdk
-          cache-from: type=gha,scope=benchmark
-
-      - name: Build musl-mimalloc-v3
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/Dockerfile
-          target: musl-mimalloc-v3
-          outputs: type=local,dest=bin/musl-mimalloc-v3
-          cache-from: type=gha,scope=benchmark
-
-      # Ubuntu 24.04 builds, used to separate the glibc version from the build image and CPU.
-      - name: Build glibc-noble-2.39
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/Dockerfile
-          target: glibc-noble-2.39
-          outputs: type=local,dest=bin/glibc-noble-2.39
-          cache-from: type=gha,scope=benchmark-noble
-          cache-to: type=gha,scope=benchmark-noble,mode=max
-
-      - name: Build glibc-noble
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/Dockerfile
-          target: glibc-noble
-          outputs: type=local,dest=bin/glibc-noble
-          cache-from: type=gha,scope=benchmark-noble
-
-      # blindlog-api's production setup before #379.
-      - name: Build glibc-noble-2.39-jemalloc
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: docker/Dockerfile
-          target: glibc-noble-2.39-jemalloc
-          outputs: type=local,dest=bin/glibc-noble-2.39-jemalloc
-          cache-from: type=gha,scope=benchmark-jemalloc
-          cache-to: type=gha,scope=benchmark-jemalloc,mode=max
+      - uses: ./.github/actions/build-variants
 
       - name: Install oha
         run: |
-          sudo curl -fsSL -o /usr/local/bin/oha "https://github.com/hatoo/oha/releases/download/${OHA_VERSION}/oha-linux-amd64"
+          # Release assets are named after the Debian architecture (amd64, arm64).
+          sudo curl -fsSL -o /usr/local/bin/oha "https://github.com/hatoo/oha/releases/download/${OHA_VERSION}/oha-linux-$(dpkg --print-architecture)"
           sudo chmod +x /usr/local/bin/oha
           oha --version
 
@@ -117,6 +74,7 @@ jobs:
         run: python3 scripts/collect_env.py results bin
 
       - name: Benchmark
+        if: inputs.mode != 'profile'
         env:
           # Pull requests and pushes run a short smoke benchmark; full runs are manual.
           VARIANTS: ${{ github.event_name == 'workflow_dispatch' && inputs.variants || 'glibc glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-sdk musl-mimalloc-v3' }}
@@ -125,11 +83,60 @@ jobs:
           REPS: ${{ github.event_name == 'workflow_dispatch' && inputs.reps || '1' }}
           WARMUP: ${{ github.event_name == 'workflow_dispatch' && inputs.warmup || '1' }}
           DURATION: ${{ github.event_name == 'workflow_dispatch' && inputs.duration || '3' }}
-        run: scripts/benchmark.sh
+          CPU_CONFIGS: ${{ inputs.cpu_configs }}
+        run: |
+          if [[ -z "$CPU_CONFIGS" ]]; then
+            scripts/benchmark.sh
+          else
+            # Each server:client CPU split gets its own results directory.
+            for config in $CPU_CONFIGS; do
+              SERVER_CPUS=${config%%:*} CLIENT_CPUS=${config#*:} RESULTS_DIR="results/cpus-${config%%:*}" scripts/benchmark.sh
+            done
+          fi
 
       - name: Summarize
-        if: always()
-        run: python3 scripts/summarize.py results | tee -a "$GITHUB_STEP_SUMMARY"
+        if: always() && inputs.mode != 'profile'
+        run: |
+          if compgen -G "results/cpus-*" >/dev/null; then
+            for dir in results/cpus-*; do
+              cp results/environment.json "$dir/"
+              echo "# Server CPUs ${dir#results/cpus-}" | tee -a "$GITHUB_STEP_SUMMARY"
+              python3 scripts/summarize.py "$dir" | tee -a "$GITHUB_STEP_SUMMARY"
+            done
+          else
+            python3 scripts/summarize.py results | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Install perf
+        if: inputs.mode == 'profile'
+        run: |
+          sudo apt-get -q update
+          sudo apt-get -q install -y linux-tools-common "linux-tools-$(uname -r)" \
+            || sudo apt-get -q install -y linux-tools-common linux-tools-azure linux-tools-generic
+          # The perf wrapper refuses to run when no tools match the running kernel exactly;
+          # use the newest installed perf binary directly.
+          perf_bin=$(ls -d /usr/lib/linux-tools*/*/perf /usr/lib/linux-tools/*/perf 2>/dev/null | sort -V | tail -n 1)
+          echo "PERF=$perf_bin" >> "$GITHUB_ENV"
+          sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+          "$perf_bin" --version
+
+      - name: Profile
+        if: inputs.mode == 'profile'
+        env:
+          VARIANTS: ${{ inputs.variants }}
+          ENDPOINTS: ${{ inputs.endpoints }}
+          DURATION: ${{ inputs.duration }}
+          CPU_CONFIGS: ${{ inputs.cpu_configs }}
+        run: |
+          if [[ -n "$CPU_CONFIGS" ]]; then
+            first=${CPU_CONFIGS%% *}
+            export SERVER_CPUS=${first%%:*} CLIENT_CPUS=${first#*:}
+          fi
+          scripts/profile.sh
+
+      - name: Summarize profile
+        if: always() && inputs.mode == 'profile'
+        run: python3 scripts/summarize_profile.py results | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
         if: always()

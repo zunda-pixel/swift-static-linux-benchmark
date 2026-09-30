@@ -15,10 +15,18 @@
 #                     musl's allocator in libc.a with mimalloc (swiftlang/swift-docker#488).
 #   musl-mimalloc-v3  Swift Static Linux SDK with our mimalloc v3 mimalloc.o linked in, which
 #                     takes precedence over the SDK's bundled mimalloc, fully static
+#   musl-mallocng     Swift Static Linux SDK with musl's own allocator (mallocng) restored,
+#                     built from the same musl version, fully static
+#   musl-sdk-fastmemcpy
+#                     Swift Static Linux SDK as shipped, but with a memcpy that is fast for small
+#                     copies (native/fast_memcpy.c) on x86_64. On aarch64, musl's memcpy is
+#                     already optimized, so it is not replaced (identical to musl-sdk).
 #
 # The toolchain and SDK versions match zunda-pixel/blindlog-api#379.
 
 ARG MIMALLOC_VERSION=v3.5.3
+# Must match the musl version of the Static Linux SDK (checked by build-musl-malloc.sh).
+ARG MUSL_VERSION=v1.2.5
 
 # ================================
 # Toolchain + Static Linux SDK + mimalloc.o
@@ -35,6 +43,32 @@ ARG MIMALLOC_VERSION
 RUN git clone --depth 1 --branch "${MIMALLOC_VERSION}" https://github.com/microsoft/mimalloc.git /mimalloc
 COPY scripts/build-mimalloc.sh /usr/local/bin/build-mimalloc.sh
 RUN build-mimalloc.sh /mimalloc /mimalloc/mimalloc.o
+
+# ================================
+# musl's own allocator (mallocng), built from source
+# ================================
+FROM toolchain AS musl-malloc
+ARG MUSL_VERSION
+# The Swift image has no make.
+RUN apt-get -q update \
+    && DEBIAN_FRONTEND=noninteractive apt-get -q install -y --no-install-recommends make \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch "${MUSL_VERSION}" https://git.musl-libc.org/git/musl /musl
+COPY native /native
+COPY scripts/build-musl-malloc.sh /usr/local/bin/build-musl-malloc.sh
+RUN build-musl-malloc.sh /musl /native /musl-malloc
+
+# ================================
+# Fast memcpy for x86_64 musl, tested before use
+# ================================
+FROM toolchain AS fast-memcpy
+COPY native /native
+RUN clang -O2 -ffreestanding -fno-builtin -DFAST_MEMCPY_TEST -DMEMCPY_NAME=fast_memcpy -c /native/fast_memcpy.c -o /tmp/fast_memcpy_test.o \
+    && clang -O2 /native/test_fast_memcpy.c /tmp/fast_memcpy_test.o -o /tmp/test_fast_memcpy \
+    && /tmp/test_fast_memcpy \
+    && mkdir -p /fast-memcpy \
+    && clang --target="$(uname -m)-unknown-linux-musl" -O2 -ffreestanding -fno-builtin -c /native/fast_memcpy.c -o /fast-memcpy/fast_memcpy.o \
+    && nm /fast-memcpy/fast_memcpy.o
 
 # ================================
 # Sources
@@ -83,6 +117,38 @@ RUN SDK="$(uname -m)-swift-linux-musl" \
     && swift --version > /out/swift-version.txt 2>&1 \
     && swift sdk list > /out/swift-sdk.txt \
     && printf '{"variant":"musl-mimalloc-v3","libc":"musl","allocator":"mimalloc %s","swift_stdlib":"static","build_flags":"-c release --swift-sdk %s -Xlinker mimalloc.o"}\n' "$MIMALLOC_VERSION" "$SDK" > /out/build-info.json
+
+# ================================
+# musl + musl's own allocator (mallocng)
+# ================================
+FROM source AS build-musl-mallocng
+COPY --from=musl-malloc /musl-malloc /musl-malloc
+RUN SDK="$(uname -m)-swift-linux-musl" \
+    && LINK="$(sed 's|^|-Xlinker |' /musl-malloc/objects.txt | tr '\n' ' ')" \
+    && swift build -c release --product BenchmarkServer --swift-sdk "$SDK" $LINK \
+    && mkdir -p /out \
+    && cp "$(swift build -c release --swift-sdk "$SDK" $LINK --show-bin-path)/BenchmarkServer" /out/ \
+    && swift --version > /out/swift-version.txt 2>&1 \
+    && swift sdk list > /out/swift-sdk.txt \
+    && printf '{"variant":"musl-mallocng","libc":"musl","allocator":"musl mallocng (musl %s, built from source)","swift_stdlib":"static","build_flags":"-c release --swift-sdk %s -Xlinker <musl allocator objects>"}\n' "$(cat /musl-malloc/version)" "$SDK" > /out/build-info.json
+
+# ================================
+# musl + SDK mimalloc + fast memcpy (x86_64)
+# ================================
+FROM source AS build-musl-sdk-fastmemcpy
+COPY --from=fast-memcpy /fast-memcpy /fast-memcpy
+RUN SDK="$(uname -m)-swift-linux-musl" \
+    && if [ "$(uname -m)" = x86_64 ]; then \
+         LINK="-Xlinker /fast-memcpy/fast_memcpy.o"; MEMCPY="native/fast_memcpy.c"; \
+       else \
+         LINK=""; MEMCPY="musl (not replaced on $(uname -m))"; \
+       fi \
+    && swift build -c release --product BenchmarkServer --swift-sdk "$SDK" $LINK \
+    && mkdir -p /out \
+    && cp "$(swift build -c release --swift-sdk "$SDK" $LINK --show-bin-path)/BenchmarkServer" /out/ \
+    && swift --version > /out/swift-version.txt 2>&1 \
+    && swift sdk list > /out/swift-sdk.txt \
+    && printf '{"variant":"musl-sdk-fastmemcpy","libc":"musl","allocator":"mimalloc (bundled in the Static Linux SDK)","memcpy":"%s","swift_stdlib":"static","build_flags":"-c release --swift-sdk %s %s"}\n' "$MEMCPY" "$SDK" "$LINK" > /out/build-info.json
 
 # ================================
 # glibc, built on Ubuntu 24.04 (noble)
@@ -155,3 +221,9 @@ COPY --from=build-musl-sdk /out/ /
 
 FROM scratch AS musl-mimalloc-v3
 COPY --from=build-musl-mimalloc-v3 /out/ /
+
+FROM scratch AS musl-mallocng
+COPY --from=build-musl-mallocng /out/ /
+
+FROM scratch AS musl-sdk-fastmemcpy
+COPY --from=build-musl-sdk-fastmemcpy /out/ /

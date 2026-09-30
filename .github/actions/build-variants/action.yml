@@ -65,3 +65,25 @@ runs:
         outputs: type=local,dest=bin/glibc-noble-2.39-jemalloc
         cache-from: type=gha,scope=benchmark-jemalloc-${{ runner.arch }}
         cache-to: type=gha,scope=benchmark-jemalloc-${{ runner.arch }},mode=max
+
+    # musl's own allocator restored, and the SDK build with a faster memcpy (x86_64).
+    - name: Build musl-mallocng
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/Dockerfile
+        target: musl-mallocng
+        outputs: type=local,dest=bin/musl-mallocng
+        cache-from: |
+          type=gha,scope=benchmark-${{ runner.arch }}
+          type=gha,scope=benchmark-musl-malloc-${{ runner.arch }}
+        cache-to: type=gha,scope=benchmark-musl-malloc-${{ runner.arch }},mode=max
+
+    - name: Build musl-sdk-fastmemcpy
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/Dockerfile
+        target: musl-sdk-fastmemcpy
+        outputs: type=local,dest=bin/musl-sdk-fastmemcpy
+        cache-from: type=gha,scope=benchmark-${{ runner.arch }}

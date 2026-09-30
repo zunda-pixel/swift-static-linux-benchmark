@@ -19,7 +19,7 @@ on:
           Empty splits the CPUs in half. Profile mode uses the first one.
         default: ""
       variants:
-        description: Variants to benchmark (space separated; also glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc)
+        description: Variants to benchmark (space separated; also glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-mallocng musl-sdk-fastmemcpy)
         default: glibc musl-sdk musl-mimalloc-v3
       endpoints:
         description: Endpoints to benchmark (space separated)
@@ -78,7 +78,7 @@ jobs:
         if: inputs.mode != 'profile'
         env:
           # Pull requests and pushes run a short smoke benchmark; full runs are manual.
-          VARIANTS: ${{ github.event_name == 'workflow_dispatch' && inputs.variants || 'glibc glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-sdk musl-mimalloc-v3' }}
+          VARIANTS: ${{ github.event_name == 'workflow_dispatch' && inputs.variants || 'glibc glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-sdk musl-mimalloc-v3 musl-mallocng musl-sdk-fastmemcpy' }}
           ENDPOINTS: ${{ github.event_name == 'workflow_dispatch' && inputs.endpoints || 'plaintext json allocation parallel-allocation' }}
           CONCURRENCIES: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrencies || '1 50' }}
           REPS: ${{ github.event_name == 'workflow_dispatch' && inputs.reps || '1' }}

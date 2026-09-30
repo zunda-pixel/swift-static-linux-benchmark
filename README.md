@@ -79,6 +79,21 @@ blindlog-api の #379 直前（commit eecd754）の Dockerfile と同じ構成�
 - `glibc-noble-2.39` との比較: 同じ glibc 2.39・同じビルド方法での、glibc malloc と jemalloc の差
 - allocation 系で `musl-sdk` とほぼ同じなら、musl 系の優位は allocator（glibc malloc と比べた新しい allocator）によるもの
 
+### musl の allocator と memcpy を切り分ける variant
+
+| Variant | allocator | memcpy | 分かること |
+|---|---|---|---|
+| `musl-mallocng` | musl 本来の mallocng（musl 1.2.5 をソースからビルド） | musl | SDK が mimalloc にしていなかった場合（Swift 6.4.0 より前の SDK 相当）の性能 |
+| `musl-sdk-fastmemcpy` | mimalloc（SDK 同梱） | 小さなコピーが速い memcpy（x86_64 のみ） | x64 で musl-sdk が jemalloc 版に負ける原因が memcpy かどうか |
+
+- `musl-mallocng`: SDK は `libc.a` から musl の allocator を、`libc++abi.a` から `operator new/delete` を取り除いて mimalloc に置き換えています。
+  そこで SDK と同じ musl 1.2.5 をソースからビルドし、allocator のオブジェクトと、malloc の上に書いた `operator new/delete`（[`native/new_delete.cpp`](native/new_delete.cpp)）を最終リンクに渡します（[`scripts/build-musl-malloc.sh`](scripts/build-musl-malloc.sh)）。
+  オブジェクトは `libc.a` のメンバーより優先されるので、SDK の mimalloc は取り込まれません。musl のビルドオプションは SDK と同じとは限りません。
+- `musl-sdk-fastmemcpy`: musl の x86_64 の memcpy は `rep movsq` によるもので、小さなコピーでは起動のコストが目立ちます。
+  256 バイトまでをベクトルのロード / ストアで、それより大きいものを `rep movsb` でコピーする memcpy（[`native/fast_memcpy.c`](native/fast_memcpy.c)）に置き換えます。
+  Docker のビルド中に、長さ・アライメント・前方向の重なりを総当たりで確かめるテスト（[`native/test_fast_memcpy.c`](native/test_fast_memcpy.c)）を通してからリンクします。
+  aarch64 では musl の memcpy がすでに最適化されているので置き換えず、`musl-sdk` と同じバイナリになります。
+
 ### allocator が本当に想定どおりかの検証
 
 variant 名と実際の allocator が食い違っていてはベンチマーク全体が無意味になるため（実際に上記の前提違いはこれで見つかりました）、
@@ -87,7 +102,8 @@ variant 名と実際の allocator が食い違っていてはベンチマーク�
 1. `file` / `ldd`: musl 系は `statically linked`。glibc 系は Swift runtime への動的依存がないこと、
    `libc.so.6` が想定したもの（host か同梱）に解決されること、jemalloc 版では `libjemalloc.so.2` が同梱したものに解決されること
 2. `nm`: musl 系では `malloc` のアドレスが `mi_malloc` と一致する。glibc 版には `mi_malloc` が無い
-3. 実行時（`MIMALLOC_VERBOSE=1`、`MALLOC_CONF=stats_print:true`）: glibc 系は mimalloc の出力なし、`musl-mimalloc-v3` は v3.5.3、`musl-sdk` はそれ以外の版（SDK 同梱）。
+3. 実行時（`MIMALLOC_VERBOSE=1`、`MALLOC_CONF=stats_print:true`）: glibc 系と `musl-mallocng` は mimalloc の出力なし、`musl-mimalloc-v3` は v3.5.3、`musl-sdk` はそれ以外の版（SDK 同梱）。
+   `musl-mallocng` は mallocng のシンボル（`__malloc_context`）があること、`musl-sdk-fastmemcpy` は（x86_64 で）`memcpy` が `native/fast_memcpy.c` に解決されること。
    glibc 系は実行中のプロセスにマップされた `libc.so.6` とそのバージョンを確認し、jemalloc 版だけが `libjemalloc.so.2` をマップして jemalloc の統計を出力すること
 4. 全 variant・全 endpoint が 200 を返す
 
@@ -499,6 +515,7 @@ GitHub-hosted runner は同じラベルでも実行ごとに CPU が変わるこ
 - `perf stat`: CPU 時間、命令数（VM で使える場合）、コンテキストスイッチ、wakeup、futex・epoll_wait・read/write・mmap 系のシステムコール回数。
   oha が同じ時間内に処理したリクエスト数で割り、1 リクエストあたりの値にします。
 - `perf record`: フラットな CPU プロファイル（共有ライブラリ別・関数別）。Swift のシンボルは `swift demangle` で読める形にします。
+- `perf record --call-graph dwarf`（`futex` と `sched_switch`）: futex を呼んでいる箇所と、スレッドが止まる箇所の呼び出し元（`callers.txt`、Job Summary には出しません）。
 
 結果は Job Summary と `results/profile/` に出ます（[`scripts/summarize_profile.py`](scripts/summarize_profile.py)）。
 musl 版は libc も含めて 1 つのバイナリなので、共有ライブラリ別の内訳では libc が分かれず、関数別の内訳で見ます。
@@ -567,8 +584,9 @@ GitHub-hosted runner は共有 VM でノイズがあるため、rep 間の stdev
 
 ## 第2フェーズ
 
-- musl 本来の allocator（mallocng）を復元した variant を追加し、「musl malloc だった場合」との比較も行う
+- musl 本来の allocator（mallocng）との比較（`musl-mallocng` variant）
+- musl 版の memcpy の影響の確認（`musl-sdk-fastmemcpy` variant）
+- p99 の差の原因の調査（`futex` / `sched_switch` の呼び出し元を `perf` で記録し、SwiftNIO のイベントループの挙動と合わせて調べる）
+- glibc 2.43 の malloc で futex が増えた理由の調査（同上）
 - 4 vCPU を超える環境（self-hosted runner など）での計測。GitHub の標準 runner は x64 / ARM64 とも 4 vCPU で、larger runners は個人アカウントでは使えない
-- musl 版の memcpy の影響の確認（musl-sdk に glibc 相当の高速な memcpy を入れた variant と比べる）
-- p99 の差の原因の調査（コンテキストスイッチ・`epoll_wait` の違いを、SwiftNIO のイベントループの挙動と合わせて調べる）
-- glibc 2.43 の malloc で futex が増えた理由と、Intel Xeon 8370C で plaintext / json が遅くなった理由の調査
+- Intel Xeon 8370C で glibc 2.43 の plaintext / json が遅くなった理由の調査。runner の CPU は選べないため、同じ CPU に当たったときに profile を取る

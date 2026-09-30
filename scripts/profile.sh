@@ -5,6 +5,8 @@
 #   1. `perf stat`: CPU time, context switches, page faults, and scheduler / syscall tracepoints
 #      (futex, epoll_wait, read/write, mmap/munmap/madvise, ...), later normalized per request.
 #   2. `perf record`: flat CPU profile (no call graphs), reported by shared object and symbol.
+#   3. `perf record -e syscalls:sys_enter_futex,sched:sched_switch --call-graph dwarf` for
+#      CALLER_DURATION seconds: who calls futex and where threads block (callers.txt).
 #
 # Needs perf and permission to use it (run as a user that can sudo). Output goes to
 # $RESULTS_DIR/profile/<variant>/<endpoint>/.
@@ -15,6 +17,7 @@
 #   CONCURRENCY  default: 50
 #   WARMUP       seconds, default: 5
 #   DURATION     seconds per perf pass, default: 20
+#   CALLER_DURATION  seconds for the call graph pass, default: 10 (0 skips it)
 #   SERVER_CPUS / CLIENT_CPUS   taskset CPU lists; default splits the CPUs in half
 #   PERF         default: perf
 set -euo pipefail
@@ -27,6 +30,7 @@ read -r -a ENDPOINTS <<<"${ENDPOINTS:-plaintext json allocation}"
 CONCURRENCY=${CONCURRENCY:-50}
 WARMUP=${WARMUP:-5}
 DURATION=${DURATION:-20}
+CALLER_DURATION=${CALLER_DURATION:-10}
 PERF=${PERF:-perf}
 OHA=${OHA:-oha}
 # Ubuntu's libc.so.6 only exports public symbols; debuginfod lets perf report name internal
@@ -116,6 +120,18 @@ for variant in "${VARIANTS[@]}"; do
     "$PERF" report -i "$dir/perf.data" --stdio --no-children --sort dso --percent-limit 0.5 2>/dev/null >"$dir/dso.txt" || true
     "$PERF" report -i "$dir/perf.data" --stdio --no-children --sort dso,sym --percent-limit 0 2>/dev/null \
       | demangle >"$dir/symbols.txt" || true
+    # 3. Callers of futex and of context switches (DWARF unwinding; the binaries keep debug info).
+    if ((CALLER_DURATION > 0)); then
+      sudo "$PERF" record -q -e syscalls:sys_enter_futex,sched:sched_switch --call-graph dwarf,16384 \
+        -p "$SERVER_PID" -o "$dir/callers.data" -- sleep "$CALLER_DURATION" &
+      perf_pid=$!
+      client -c "$CONCURRENCY" -z "${CALLER_DURATION}s" --no-tui --output-format json "$url" >/dev/null
+      wait "$perf_pid" || true
+      sudo chown "$(id -u):$(id -g)" "$dir/callers.data" 2>/dev/null || true
+      "$PERF" report -i "$dir/callers.data" --stdio --no-children --sort sym --percent-limit 2 \
+        -g caller,2,callee,function,percent --max-stack 16 2>/dev/null | demangle >"$dir/callers.txt" || true
+      rm -f "$dir/callers.data"
+    fi
     echo "  $endpoint done"
   done
 

@@ -40,7 +40,12 @@ glibc_banner() {
 # The host's libc.so.6, as resolved for any dynamically linked host program.
 HOST_LIBC=$(ldd /bin/true | awk '$1 == "libc.so.6" { print $3; exit }')
 
-read -r -a VARIANTS <<<"${VARIANTS:-glibc glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-sdk musl-mimalloc-v3}"
+read -r -a VARIANTS <<<"${VARIANTS:-glibc glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-sdk musl-mimalloc-v3 musl-mallocng musl-sdk-fastmemcpy}"
+
+# Variants that are expected to run on mimalloc (the SDK's or ours).
+uses_mimalloc() {
+  [[ $1 != glibc* && $1 != musl-mallocng ]]
+}
 
 for variant in "${VARIANTS[@]}"; do
   bin=$(server_binary "$variant")
@@ -91,8 +96,12 @@ for variant in "${VARIANTS[@]}"; do
 
   mi_malloc=$(symbol_address "$symbols" mi_malloc)
   malloc=$(symbol_address "$symbols" malloc)
-  if [[ $variant == glibc* ]]; then
+  if ! uses_mimalloc "$variant"; then
     if [[ -z "$mi_malloc" ]]; then pass "mimalloc is not linked"; else fail "unexpected mi_malloc symbol"; fi
+    if [[ $variant == musl-mallocng ]]; then
+      # mallocng keeps its state in the hidden global __malloc_context.
+      if [[ -n "$(symbol_address "$symbols" __malloc_context)" ]]; then pass "musl mallocng is linked (__malloc_context)"; else fail "__malloc_context (mallocng) not found"; fi
+    fi
   else
     if [[ -n "$mi_malloc" ]]; then pass "mimalloc is linked (mi_malloc @ $mi_malloc)"; else fail "mi_malloc symbol not found"; fi
     if [[ -n "$malloc" && "$malloc" == "$mi_malloc" ]]; then
@@ -100,6 +109,15 @@ for variant in "${VARIANTS[@]}"; do
     else
       fail "malloc (@ ${malloc:-none}) does not resolve to mi_malloc (@ ${mi_malloc:-none})"
     fi
+  fi
+
+  # memcpy: musl-sdk-fastmemcpy replaces it with native/fast_memcpy.c on x86_64 only.
+  fast_memcpy=$(symbol_address "$symbols" benchmark_fast_memcpy)
+  if [[ $variant == musl-sdk-fastmemcpy && $(uname -m) == x86_64 ]]; then
+    memcpy=$(symbol_address "$symbols" memcpy)
+    if [[ -n "$fast_memcpy" && "$memcpy" == "$fast_memcpy" ]]; then pass "memcpy resolves to native/fast_memcpy.c ($memcpy)"; else fail "memcpy (@ ${memcpy:-none}) is not native/fast_memcpy.c (@ ${fast_memcpy:-none})"; fi
+  elif [[ -n "$fast_memcpy" ]]; then
+    fail "unexpected native/fast_memcpy.c in $variant"
   fi
 
   # Runtime check: mimalloc prints its version and options to stderr when MIMALLOC_VERBOSE=1.
@@ -135,6 +153,10 @@ for variant in "${VARIANTS[@]}"; do
     else
       echo "glibc malloc (glibc ${version:-unknown})" >"$BIN_DIR/$variant/runtime-allocator.txt"
     fi
+  elif [[ $variant == musl-mallocng ]]; then
+    if grep -q "mimalloc" "$log"; then fail "mimalloc output from the mallocng build"; else pass "no mimalloc output at runtime"; fi
+    musl_version=$(grep -oE 'musl [0-9.]+' "$BIN_DIR/$variant/build-info.json" | head -n 1 || true)
+    echo "musl mallocng (${musl_version:-musl ?})" >"$BIN_DIR/$variant/runtime-allocator.txt"
   else
     if [[ -n "$runtime_version" ]]; then pass "mimalloc $runtime_version active at runtime"; else fail "no mimalloc version in MIMALLOC_VERBOSE=1 output"; fi
     if [[ $variant == musl-mimalloc-v3 ]]; then

@@ -340,7 +340,23 @@ GitHub-hosted runner は同じラベルでも実行ごとに CPU が変わるこ
 ### GitHub Actions
 
 - `pull_request` / `push`（main）: ビルド・検証と、短時間（1 rep、3 秒、concurrency `1 50`）の疎通確認のみ。
-- `workflow_dispatch`: フル計測。variant・endpoint・concurrency・rep 数・時間を入力で変更できます。
+- `workflow_dispatch`: フル計測。variant・endpoint・concurrency・rep 数・時間を入力で変更できます。加えて次の入力があります。
+  - `runner`: `ubuntu-26.04`（x64）または `ubuntu-26.04-arm`（ARM64）。どちらも 4 vCPU です。
+  - `cpu_configs`: サーバーと oha の CPU 割り当てを `server:client` の形で並べると、同じ job の中で順番に計測します
+    （例: `0:1-3 0-1:2-3 0-2:3` でサーバー 1 / 2 / 3 コア）。結果は `results/cpus-<server>/` に分かれます。
+    コア数を増やしたときに allocator の lock contention でスループットが伸びなくなるかを見るためのものです。
+  - `mode`: `benchmark`（oha による計測）または `profile`（後述の `perf` による調査）。
+
+### perf による調査（`mode: profile`）
+
+[`scripts/profile.sh`](scripts/profile.sh) は、variant と endpoint ごとに一定の負荷（c=50）をかけながら `perf` で次を取ります。
+
+- `perf stat`: CPU 時間、命令数（VM で使える場合）、コンテキストスイッチ、wakeup、futex・epoll_wait・read/write・mmap 系のシステムコール回数。
+  oha が同じ時間内に処理したリクエスト数で割り、1 リクエストあたりの値にします。
+- `perf record`: フラットな CPU プロファイル（共有ライブラリ別・関数別）。Swift のシンボルは `swift demangle` で読める形にします。
+
+結果は Job Summary と `results/profile/` に出ます（[`scripts/summarize_profile.py`](scripts/summarize_profile.py)）。
+musl 版は libc も含めて 1 つのバイナリなので、共有ライブラリ別の内訳では libc が分かれず、関数別の内訳で見ます。
 
 結果は Job Summary に表として出力され、生データは Artifact（`results/`）に保存されます。
 
@@ -356,11 +372,11 @@ results/
 
 ### ローカル
 
-Docker（buildx）が必要です。バイナリは linux/amd64 向けにビルドされます。
+Docker（buildx）が必要です。バイナリは linux/amd64 向けにビルドされます（`PLATFORM=linux/arm64 scripts/build.sh` で ARM64）。
 
 ```sh
 scripts/build.sh                       # bin/{glibc,musl-sdk,musl-mimalloc-v3}/ を生成
-# 以下は Linux (x86_64) 上で実行
+# 以下はビルドしたアーキテクチャの Linux 上で実行
 scripts/verify.sh
 python3 scripts/collect_env.py
 REPS=1 DURATION=5 WARMUP=2 scripts/benchmark.sh

@@ -1,0 +1,67 @@
+name: Build variants
+description: Builds every benchmark variant with Docker for the runner's architecture and exports it to bin/<variant>/.
+
+# Cache scopes include the architecture so x64 and ARM64 caches do not overwrite each other.
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@v4
+
+    - name: Build glibc
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/Dockerfile
+        target: glibc
+        outputs: type=local,dest=bin/glibc
+        cache-from: type=gha,scope=benchmark-${{ runner.arch }}
+        cache-to: type=gha,scope=benchmark-${{ runner.arch }},mode=max
+
+    - name: Build musl-sdk
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/Dockerfile
+        target: musl-sdk
+        outputs: type=local,dest=bin/musl-sdk
+        cache-from: type=gha,scope=benchmark-${{ runner.arch }}
+
+    - name: Build musl-mimalloc-v3
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/Dockerfile
+        target: musl-mimalloc-v3
+        outputs: type=local,dest=bin/musl-mimalloc-v3
+        cache-from: type=gha,scope=benchmark-${{ runner.arch }}
+
+    # Ubuntu 24.04 builds, used to separate the glibc version from the build image and CPU.
+    - name: Build glibc-noble-2.39
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/Dockerfile
+        target: glibc-noble-2.39
+        outputs: type=local,dest=bin/glibc-noble-2.39
+        cache-from: type=gha,scope=benchmark-noble-${{ runner.arch }}
+        cache-to: type=gha,scope=benchmark-noble-${{ runner.arch }},mode=max
+
+    - name: Build glibc-noble
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/Dockerfile
+        target: glibc-noble
+        outputs: type=local,dest=bin/glibc-noble
+        cache-from: type=gha,scope=benchmark-noble-${{ runner.arch }}
+
+    # blindlog-api's production setup before #379.
+    - name: Build glibc-noble-2.39-jemalloc
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/Dockerfile
+        target: glibc-noble-2.39-jemalloc
+        outputs: type=local,dest=bin/glibc-noble-2.39-jemalloc
+        cache-from: type=gha,scope=benchmark-jemalloc-${{ runner.arch }}
+        cache-to: type=gha,scope=benchmark-jemalloc-${{ runner.arch }},mode=max

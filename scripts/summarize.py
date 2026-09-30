@@ -119,6 +119,7 @@ def markdown(summary, environment, config):
     if environment:
         lines.append(
             f"**Runner:** {environment.get('cpu_model')} · {environment.get('cpu_count')} vCPU · "
+            f"{environment.get('lscpu', {}).get('Architecture')} · "
             f"{fmt((environment.get('memory_total_bytes') or 0) / 2**30, 1)} GiB · kernel {environment.get('kernel')} · "
             f"{environment.get('oha_version')}"
         )

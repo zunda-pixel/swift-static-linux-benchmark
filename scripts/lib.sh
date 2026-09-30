@@ -9,10 +9,20 @@ server_binary() {
   echo "$BIN_DIR/$1/BenchmarkServer"
 }
 
-# Directory of a bundled glibc (glibc-noble-2.39), or empty when the host glibc is used.
+# Dynamic loader of a bundled glibc (glibc-noble-2.39*), or empty when the host glibc is used.
+# Its name depends on the architecture (ld-linux-x86-64.so.2, ld-linux-aarch64.so.1).
+bundled_loader() {
+  local loader
+  for loader in "$BIN_DIR/$1"/glibc/ld-linux-*.so.*; do
+    [[ -x "$loader" ]] && { echo "$loader"; return; }
+  done
+}
+
+# Directory of a bundled glibc, or empty when the host glibc is used.
 bundled_glibc_dir() {
-  local dir="$BIN_DIR/$1/glibc"
-  [[ -x "$dir/ld-linux-x86-64.so.2" ]] && echo "$dir" || true
+  local loader
+  loader=$(bundled_loader "$1")
+  [[ -n "$loader" ]] && dirname "$loader" || true
 }
 
 # Command line that starts the server binary. Shared libraries a variant ships in lib/ are
@@ -20,11 +30,11 @@ bundled_glibc_dir() {
 # statically). A variant with a bundled glibc is started
 # through that glibc's dynamic loader, so the bundled libc.so.6 is used instead of the host's.
 server_command() {
-  local bin glibc
+  local bin loader
   bin=$(server_binary "$1")
-  glibc=$(bundled_glibc_dir "$1")
-  if [[ -n "$glibc" ]]; then
-    echo "$glibc/ld-linux-x86-64.so.2 --library-path $BIN_DIR/$1/lib:$glibc $bin"
+  loader=$(bundled_loader "$1")
+  if [[ -n "$loader" ]]; then
+    echo "$loader --library-path $BIN_DIR/$1/lib:$(dirname "$loader") $bin"
   else
     echo "$bin"
   fi

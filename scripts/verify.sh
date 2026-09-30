@@ -30,12 +30,15 @@ glibc_banner() {
   local glibc out
   glibc=$(bundled_glibc_dir "$1")
   if [[ -n "$glibc" ]]; then
-    out=$("$glibc/ld-linux-x86-64.so.2" --library-path "$glibc" "$glibc/libc.so.6" 2>&1 || true)
+    out=$("$(bundled_loader "$1")" --library-path "$glibc" "$glibc/libc.so.6" 2>&1 || true)
   else
     out=$(ldd --version 2>&1 || true)
   fi
   echo "${out%%$'\n'*}"
 }
+
+# The host's libc.so.6, as resolved for any dynamically linked host program.
+HOST_LIBC=$(ldd /bin/true | awk '$1 == "libc.so.6" { print $3; exit }')
 
 read -r -a VARIANTS <<<"${VARIANTS:-glibc glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-sdk musl-mimalloc-v3}"
 
@@ -49,11 +52,11 @@ for variant in "${VARIANTS[@]}"; do
   file_out=$(file "$bin")
   glibc=$(bundled_glibc_dir "$variant")
   if [[ -n "$glibc" ]]; then
-    ldd_out=$("$glibc/ld-linux-x86-64.so.2" --library-path "$BIN_DIR/$variant/lib:$glibc" --list "$bin" 2>&1 || true)
+    ldd_out=$("$(bundled_loader "$variant")" --library-path "$BIN_DIR/$variant/lib:$glibc" --list "$bin" 2>&1 || true)
     expected_libc="$glibc/libc.so.6"
   else
     ldd_out=$(LD_LIBRARY_PATH="$BIN_DIR/$variant/lib" ldd "$bin" 2>&1 || true)
-    expected_libc="/lib/x86_64-linux-gnu/libc.so.6"
+    expected_libc=$HOST_LIBC
   fi
   symbols=$(nm "$bin" 2>/dev/null || true)
   echo "$file_out"

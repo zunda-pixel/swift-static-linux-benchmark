@@ -40,11 +40,12 @@ on:
   push:
     branches: [main]
 
-# One group per event and ref, so a push to main never cancels a full benchmark run started with
-# workflow_dispatch (or vice versa). Only superseded pull request runs are cancelled; other
-# runs of the same group wait for the running one to finish.
+# Pull request and push runs are grouped per event and ref: superseded pull request runs are
+# cancelled, and pushes wait for the running one. Manually dispatched runs each get their own group
+# (by run id): they run on separate VMs, and sharing a group would cancel all but the newest of the
+# runs waiting in it.
 concurrency:
-  group: benchmark-${{ github.event_name }}-${{ github.ref }}
+  group: benchmark-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:

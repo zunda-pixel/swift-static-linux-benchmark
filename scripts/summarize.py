@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = "glibc"
-VARIANT_ORDER = ["glibc", "glibc-noble", "glibc-noble-2.39", "glibc-noble-2.39-jemalloc", "musl-sdk", "musl-mimalloc-v3"]
+VARIANT_ORDER = ["glibc", "glibc-noble", "glibc-noble-2.39", "glibc-noble-2.39-jemalloc", "musl-sdk", "musl-sdk-fastmemcpy", "musl-mimalloc-v3", "musl-mallocng"]
 ENDPOINT_ORDER = ["plaintext", "json", "string", "array", "array-reserved", "allocation", "parallel-allocation"]
 
 

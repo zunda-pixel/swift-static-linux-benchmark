@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PLATFORM=${PLATFORM:-linux/amd64}
 variants=("$@")
-((${#variants[@]})) || variants=(glibc glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-sdk musl-mimalloc-v3)
+((${#variants[@]})) || variants=(glibc glibc-noble glibc-noble-2.39 glibc-noble-2.39-jemalloc musl-sdk musl-mimalloc-v3 musl-mallocng musl-sdk-fastmemcpy)
 
 for variant in "${variants[@]}"; do
   echo "== building $variant"

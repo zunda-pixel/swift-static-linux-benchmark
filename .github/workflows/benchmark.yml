@@ -114,9 +114,19 @@ jobs:
           sudo apt-get -q update
           sudo apt-get -q install -y linux-tools-common "linux-tools-$(uname -r)" \
             || sudo apt-get -q install -y linux-tools-common linux-tools-azure linux-tools-generic
-          # The perf wrapper refuses to run when no tools match the running kernel exactly;
-          # use the newest installed perf binary directly.
-          perf_bin=$(ls -d /usr/lib/linux-tools*/*/perf /usr/lib/linux-tools/*/perf 2>/dev/null | sort -V | tail -n 1)
+          # Prefer the perf wrapper; if it cannot find tools for the running kernel, use a perf
+          # binary from the installed linux-tools packages directly.
+          if perf --version >/dev/null 2>&1; then
+            perf_bin=$(command -v perf)
+          else
+            perf_bin=$(dpkg -L $(dpkg -l 'linux-*tools-*' | awk '/^ii/ { print $2 }') 2>/dev/null \
+              | grep -E '/perf$' | while read -r f; do [[ -x "$f" && ! -d "$f" ]] && echo "$f"; done | sort -V | tail -n 1)
+          fi
+          if [[ -z "$perf_bin" ]]; then
+            echo "perf not found; installed tools packages:" >&2
+            dpkg -l 'linux-*tools-*' >&2 || true
+            exit 1
+          fi
           echo "PERF=$perf_bin" >> "$GITHUB_ENV"
           sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
           "$perf_bin" --version

@@ -49,6 +49,10 @@ RUN build-mimalloc.sh /mimalloc /mimalloc/mimalloc.o
 # ================================
 FROM toolchain AS musl-malloc
 ARG MUSL_VERSION
+# The Swift image has no make.
+RUN apt-get -q update \
+    && DEBIAN_FRONTEND=noninteractive apt-get -q install -y --no-install-recommends make \
+    && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 --branch "${MUSL_VERSION}" https://git.musl-libc.org/git/musl /musl
 COPY native /native
 COPY scripts/build-musl-malloc.sh /usr/local/bin/build-musl-malloc.sh

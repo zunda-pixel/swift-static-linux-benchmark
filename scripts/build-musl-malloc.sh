@@ -34,8 +34,8 @@ cd "$SRC"
 AR=$(command -v llvm-ar || command -v ar)
 RANLIB=$(command -v llvm-ranlib || command -v ranlib)
 CC="clang --target=${TARGET}" AR="$AR" RANLIB="$RANLIB" \
-  ./configure --target="$ARCH" --disable-shared --prefix=/unused >/dev/null
-make -j"$(nproc)" AR="$AR" RANLIB="$RANLIB" lib/libc.a >/dev/null
+  ./configure --target="$ARCH" --disable-shared --prefix=/unused
+make -j"$(nproc)" AR="$AR" RANLIB="$RANLIB" lib/libc.a
 
 mkdir -p "$OUT"
 : >"$OUT/objects.txt"

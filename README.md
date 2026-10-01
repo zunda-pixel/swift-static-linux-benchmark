@@ -109,12 +109,16 @@ variant 名と実際の allocator が食い違っていてはベンチマーク�
 
 ## 結果
 
-条件の異なる runner でフル計測を 5 回（x64 4 回、ARM64 1 回）、コア数スケーリングを 1 回、`perf` による調査を 2 回（x64 / ARM64）行いました。
+条件の異なる runner でフル計測を 7 回（x64 5 回、ARM64 2 回）、コア数スケーリングを 1 回、`perf` による調査を 4 回（x64 / ARM64 各 2 回）行いました。
 いずれも 4 vCPU で、フル計測は 5 rep × 30 秒の median、エラー 0 件です。
 x64 の runner は物理 2 コア × SMT 2 スレッドなので、「サーバー 2 vCPU / oha 2 vCPU」は物理コアを 1 つずつ分けた構成です（[計測方法](#計測方法)）。
 
 | 計測日 | 内容 | runner | CPU | host glibc | 全データ |
 |---|---|---|---|---|---|
+| 2026-10-01 | perf（musl の variant を含む） | `ubuntu-26.04-arm` | Neoverse-N2 | 2.43 | [`docs/results/2026-10-01-aarch64-profile.md`](docs/results/2026-10-01-aarch64-profile.md) |
+| 2026-10-01 | perf（musl の variant を含む） | `ubuntu-26.04` | AMD EPYC 7763 | 2.43 | [`docs/results/2026-10-01-x86_64-profile.md`](docs/results/2026-10-01-x86_64-profile.md) |
+| 2026-10-01 | フル計測（musl の variant、ARM64） | `ubuntu-26.04-arm` | Neoverse-N2 | 2.43 | [`docs/results/2026-10-01-aarch64-musl-variants.md`](docs/results/2026-10-01-aarch64-musl-variants.md) |
+| 2026-10-01 | フル計測（musl の variant、x64） | `ubuntu-26.04` | AMD EPYC 9V74 | 2.43 | [`docs/results/2026-10-01-x86_64-musl-variants.md`](docs/results/2026-10-01-x86_64-musl-variants.md) |
 | 2026-09-30 | perf | `ubuntu-26.04-arm` | Neoverse-N2 | 2.43 | [`docs/results/2026-09-30-aarch64-profile.md`](docs/results/2026-09-30-aarch64-profile.md) |
 | 2026-09-30 | perf | `ubuntu-26.04` | AMD EPYC 9V74 | 2.43 | [`docs/results/2026-09-30-x86_64-profile.md`](docs/results/2026-09-30-x86_64-profile.md) |
 | 2026-09-30 | コア数スケーリング | `ubuntu-26.04` | AMD EPYC 7763 | 2.43 | [`docs/results/2026-09-30-x86_64-cpu-scaling.md`](docs/results/2026-09-30-x86_64-cpu-scaling.md) |
@@ -124,7 +128,7 @@ x64 の runner は物理 2 コア × SMT 2 スレッドなので、「サーバ�
 | 2026-09-29 | フル計測 | `ubuntu-26.04` | AMD EPYC 7763 | 2.43 | [`docs/results/2026-09-29-x86_64-ubuntu26.md`](docs/results/2026-09-29-x86_64-ubuntu26.md) |
 | 2026-09-28 | フル計測 | `ubuntu-24.04` | AMD EPYC 9V45 | 2.39 | [`docs/results/2026-09-28-x86_64.md`](docs/results/2026-09-28-x86_64.md) |
 
-実行時の allocator はどの回も `glibc` 系 = glibc malloc、`glibc-noble-2.39-jemalloc` = jemalloc 5.3.0、`musl-sdk` = mimalloc v2.2.4（SDK 同梱）、`musl-mimalloc-v3` = mimalloc v3.5.3 でした。
+実行時の allocator はどの回も `glibc` 系 = glibc malloc、`glibc-noble-2.39-jemalloc` = jemalloc 5.3.0、`musl-sdk` / `musl-sdk-fastmemcpy` = mimalloc v2.2.4（SDK 同梱）、`musl-mimalloc-v3` = mimalloc v3.5.3、`musl-mallocng` = musl 1.2.5 の mallocng でした。
 2026-09-29（jemalloc）以降の回は、全 variant の Swift runtime を静的リンクにしています（それ以前の回は glibc 系が動的リンク）。
 
 **まとめ**（この workload と runner の条件下での結果です）:
@@ -138,24 +142,101 @@ x64 の runner は物理 2 コア × SMT 2 スレッドなので、「サーバ�
   | plaintext | +3〜6% | +2〜16% |
   | json | +1〜4% | −3〜+12% |
 
-  allocation 系の差は、どちらも rep 間のばらつき（stdev 1.5% 未満）より大きい差です。
-- **x64 で musl 版が allocation 系で負けるのは、memcpy が遅いため**と考えられます。
-  allocation の CPU 時間のうち、musl 版は約 10% が `memcpy` / `memmove` / `memset` でした。glibc 版では同じ関数が 2% 以下です。
-  ARM64 では musl 版の memcpy 系は約 2.4% にとどまり、mimalloc の速さがそのまま出て jemalloc より速くなりました。
+  allocation 系の差は、どちらも rep 間のばらつき（stdev 1.5% 未満）より大きい差です（2026-10-01 の再計測でも同じ傾向）。
+- **x64 で musl 版が allocation 系で負けるのは、musl の memcpy が遅いためでした。**
+  allocation の CPU 時間のうち、musl 版は 7〜10% が `memcpy` でした（glibc 版は 2% 以下）。musl の x86_64 の memcpy は `rep movsq` で、小さなコピーが遅い実装です。
+  memcpy だけを小さなコピーが速い実装に置き換えた `musl-sdk-fastmemcpy` は、memcpy の割合が約 1% に下がり、
+  **x64 でも jemalloc 版より allocation 系で 4〜10%、plaintext / json で 1〜6% 速く**なりました（musl-sdk より allocation 系で 8〜12% 速い）。
+  ARM64 では musl の memcpy がもともと速く（約 2%）、mimalloc の速さがそのまま出て jemalloc より速くなりました。
+- **SDK が mimalloc に切り替えた効果は非常に大きい**: musl 本来の allocator（mallocng）に戻すと、jemalloc 版と比べて allocation 系で
+  x64 で 29〜50%、ARM64 で 21〜80% 遅くなりました。原因はグローバルロックの取り合いで、1 リクエストあたりの `futex` が 145 回（ARM64 では 821 回）、
+  p99 は最大 1 秒（ARM64、parallel-allocation、c=100）に達しました。一方で RSS は約 17〜19 MB と、全 variant で最も小さい結果でした。
 - **glibc malloc は jemalloc より allocation 系で約 10〜15% 遅い**結果が、x64 でも ARM64 でも出ました。plaintext / json では差がありません。
   glibc malloc 版は allocation の CPU 時間の約 20% を libc（主に malloc の内部関数）で使っていて、jemalloc 版の約 2 倍です。
 - **glibc malloc と比べると、Static Linux SDK 版はどの回も下回りませんでした**（allocation 系で 0〜15% 速い。差は CPU によって違う）。
 - **コア数を増やしても、variant の順位と差はほぼ変わりませんでした**（1〜3 vCPU、x64）。allocator の lock contention でスループットが伸びなくなる様子は、3 vCPU までは見えません。
-- **p99 レイテンシは、どの回・どのアーキテクチャでも c≥10 で musl 系のほうが低い**結果でした（plaintext / json では glibc 系の約半分）。
-  perf では、musl 版は 1 リクエストあたりのコンテキストスイッチと wakeup が多く、`epoll_wait` の回数が半分以下でした。スレッドの起こし方の違いがレイテンシの分布に効いている可能性がありますが、原因までは特定できていません。
+- **p99 レイテンシは、どの回・どのアーキテクチャでも c≥10 で mimalloc を使う musl 系のほうが低い**結果でした（plaintext / json では glibc 系の約半分）。
+  perf では、musl 版は 1 リクエストあたりのコンテキストスイッチが約 2 倍で、その約半分が割り込みによる横取り（glibc 版は約 2 割）、`epoll_wait` で眠る割合は数 %（glibc 版は約 2 割）でした。
+  スレッドの動き方が違うことは分かりましたが、それが p99 の低さの原因かどうかまでは特定できていません。
 - **glibc 2.39 → 2.43 で plaintext / json が約 14% 遅くなったのは、Intel Xeon 8370C の回だけ**でした。AMD EPYC 9V74 と Neoverse-N2 では差がない（ARM64 ではむしろ 2.43 がわずかに速い）ので、特定の CPU での現象と考えられます。
-  なお glibc 2.43 の malloc は、allocation 系で `futex` の呼び出しが 2.39 の 4〜25 倍に増えていましたが、スループットはほぼ同じでした。
+  なお glibc 2.43 の malloc は、allocation 系で `futex` の呼び出しが 2.39 の 4〜50 倍に増えていました。呼び出し元は glibc 内部のロック（`__lll_lock_wait/wake_private`）で、
+  Swift のオブジェクト解放（`swift_release_dealloc` → `free`）から呼ばれていました。malloc の arena のロックの取り合いが増えたと考えられますが、スループットへの影響はほぼありませんでした。
 - **ビルドイメージ（Ubuntu 24.04 と 26.04）による差はありませんでした**（±2% 以内）。
-- **RSS は musl 系が多く**、jemalloc 版と比べて約 13 MB 多い結果でした（x64 / ARM64 とも）。
+- **RSS は mimalloc を使う musl 系が多く**、jemalloc 版と比べて約 13 MB 多い結果でした（x64 / ARM64 とも）。mallocng 版は約 17〜19 MB で最も小さい結果でした。
 - SDK 同梱の mimalloc v2.2.4 と v3.5.3 の間には、意味のある差はありませんでした。
 
 blindlog-api#379 について: Swift 6.4.0 の Static Linux SDK は標準で mimalloc を使うため、「musl malloc に戻って大きく遅くなる」という懸念は当たりませんでした。
 移行前の本番構成（jemalloc）と比べると、x64 では allocation の多い処理が数 % 遅く、ARM64 では逆に数 % 速くなります。どちらでもメモリは 10 MB 余り増え、p99 レイテンシは下がります。
+x64 の数 % の差は musl の memcpy によるもので、memcpy を置き換えれば x64 でも jemalloc 版より速くなりました（ただし SDK やアプリ側で memcpy を置き換えるのは、検証の目的以外では勧めません）。
+一方、mimalloc が入る前の Static Linux SDK（musl 本来の allocator）だったなら、allocation の多い処理は 3〜8 割遅くなっていたはずです。
+
+### 2026-10-01: musl の allocator と memcpy の切り分け（x64 / AMD EPYC 9V74、ARM64 / Neoverse-N2）
+
+x64: [run 36794960032](https://github.com/zunda-pixel/swift-static-linux-benchmark/actions/runs/36794960032)、ARM64: [run 36794962789](https://github.com/zunda-pixel/swift-static-linux-benchmark/actions/runs/36794962789)（commit bc337df）。
+[musl の allocator と memcpy を切り分ける variant](#musl-の-allocator-と-memcpy-を切り分ける-variant) を含む 4 variant を計測しました。
+ARM64 の `musl-sdk-fastmemcpy` は memcpy を置き換えないので `musl-sdk` と同じバイナリで、両者の差はばらつきの目安になります。
+
+`glibc-noble-2.39-jemalloc`（移行前の本番構成）に対する req/s の差（median）:
+
+| | endpoint | variant | c=1 | c=10 | c=25 | c=50 | c=100 |
+|---|---|---|---:|---:|---:|---:|---:|
+| x64 | plaintext | musl-sdk | +2.3% | +2.0% | −1.3% | −3.9% | −4.1% |
+| | | musl-sdk-fastmemcpy | +4.3% | +3.6% | +3.2% | +3.9% | +5.8% |
+| | | musl-mallocng | +2.3% | −3.6% | −5.0% | −10.4% | −12.2% |
+| | json | musl-sdk | +1.7% | +2.0% | +1.9% | −0.5% | −0.7% |
+| | | musl-sdk-fastmemcpy | +3.8% | +4.6% | +2.6% | +1.4% | +1.9% |
+| | | musl-mallocng | +0.2% | −4.2% | −36.9% | −25.6% | −11.5% |
+| | allocation | musl-sdk | −4.5% | −4.4% | −2.0% | −3.7% | −0.9% |
+| | | musl-sdk-fastmemcpy | +3.5% | +7.1% | +9.8% | +7.8% | +8.3% |
+| | | musl-mallocng | −28.9% | −45.2% | −43.4% | −42.2% | −42.4% |
+| | parallel-allocation | musl-sdk | −3.3% | −5.1% | −4.0% | −2.9% | −2.4% |
+| | | musl-sdk-fastmemcpy | +7.8% | +7.7% | +8.0% | +9.1% | +8.4% |
+| | | musl-mallocng | −49.5% | −46.4% | −44.5% | −42.6% | −45.5% |
+| ARM64 | plaintext | musl-sdk | +9.0% | +12.6% | +3.1% | −1.3% | −0.6% |
+| | | musl-mallocng | +5.8% | −6.1% | −17.1% | −19.7% | −20.2% |
+| | json | musl-sdk | +8.8% | +6.1% | −2.1% | −3.2% | −1.6% |
+| | | musl-mallocng | +5.3% | −10.0% | −36.3% | −32.5% | −29.2% |
+| | allocation | musl-sdk | +3.6% | +5.1% | +6.4% | +5.5% | +5.8% |
+| | | musl-mallocng | −21.4% | −74.2% | −74.0% | −73.8% | −73.7% |
+| | parallel-allocation | musl-sdk | +5.7% | +2.8% | +3.0% | +2.1% | +1.7% |
+| | | musl-mallocng | −78.4% | −73.8% | −76.7% | −78.7% | −80.5% |
+
+rep 間のばらつき（stdev）は、x64 の musl-sdk / fastmemcpy の plaintext c≥25（3〜6%）と ARM64 の musl-mallocng の parallel-allocation（6〜15%）を除いて 3.5% 未満です。
+
+p99 レイテンシ（ms、median、c=100）と RSS（MB、median、allocation c=100）:
+
+| | variant | plaintext p99 | allocation p99 | parallel-allocation p99 | RSS |
+|---|---|---:|---:|---:|---:|
+| x64 | glibc-noble-2.39-jemalloc | 7.97 | 49.43 | 242.38 | 30 |
+| | musl-sdk | 4.76 | 43.03 | 237.50 | 44 |
+| | musl-sdk-fastmemcpy | 4.34 | 39.36 | 215.76 | 43 |
+| | musl-mallocng | 5.33 | 64.13 | 434.60 | 19 |
+| ARM64 | glibc-noble-2.39-jemalloc | 8.09 | 38.37 | 171.99 | 30 |
+| | musl-sdk | 3.94 | 30.13 | 164.77 | 42 |
+| | musl-mallocng | 4.84 | 108.77 | 1,028.60 | 17 |
+
+perf（x64: [run 36794965703](https://github.com/zunda-pixel/swift-static-linux-benchmark/actions/runs/36794965703) / AMD EPYC 7763、ARM64: [run 36794968649](https://github.com/zunda-pixel/swift-static-linux-benchmark/actions/runs/36794968649)）での allocation の値（1 リクエストあたり、c=50）:
+
+| | variant | CPU µs | futex | mmap+munmap+madvise | page faults | memcpy 系の CPU 時間 | kernel の CPU 時間 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| x64 | glibc-noble-2.39-jemalloc | 824 | 0.064 | 0.001 | 0.000 | 0.1% | 1.7% |
+| | musl-sdk | 816 | 0.367 | 0.008 | 0.068 | 7.2% | 2.4% |
+| | musl-sdk-fastmemcpy | 785 | 0.008 | 0.000 | 0.001 | 1.2% | 2.1% |
+| | musl-mallocng | 1,370 | 145 | 2.96 | 5.92 | 5.9% | 16.6% |
+| ARM64 | glibc-noble-2.39-jemalloc | 550 | 0.034 | 0.000 | 0.000 | 0.5% | 9.1% |
+| | musl-sdk | 531 | 0.023 | 0.005 | 0.042 | 2.3% | 8.9% |
+| | musl-mallocng | 1,899 | 821 | 2.54 | 4.96 | 0.8% | 21.2% |
+
+読み取れること:
+
+- **memcpy を置き換えると、x64 の musl-sdk の遅れが消えて jemalloc 版より速くなりました**（allocation 系で +4〜10%）。
+  memcpy 系の CPU 時間は 7.2% → 1.2% に下がり、1 リクエストあたりの CPU 時間も jemalloc 版より少なくなりました。x64 で musl-sdk が負けていた原因は memcpy だった、と言えます。
+- **musl 本来の allocator（mallocng）は、並行に allocation する処理で大きく遅くなります**。
+  futex の呼び出し元は musl の `__lock` / `__unlock`（mallocng のグローバルロック）で、スレッド切り替えの約半分がこの futex での待ちでした。
+  加えて 1 リクエストあたり約 3 回の mmap / munmap / madvise と約 6 回のページフォールトがあり、メモリを頻繁に OS へ返しています。
+  コアが 4 つあり 2 コアをサーバーが使う ARM64 では、ロックの取り合いがさらに激しく、スループットは jemalloc 版の 2〜3 割まで落ちました。
+- mallocng はメモリを細かく OS に返すぶん、RSS は最も小さく（約 17〜19 MB）、mimalloc を使う musl-sdk の半分以下でした。
+- futex と `sched_switch` の呼び出し元の詳細は、各 run の artifact の `results/profile/<variant>/<endpoint>/callers.txt` にあります。
 
 ### 2026-09-30: ARM64 / Neoverse-N2
 
@@ -584,9 +665,14 @@ GitHub-hosted runner は共有 VM でノイズがあるため、rep 間の stdev
 
 ## 第2フェーズ
 
-- musl 本来の allocator（mallocng）との比較（`musl-mallocng` variant）
-- musl 版の memcpy の影響の確認（`musl-sdk-fastmemcpy` variant）
-- p99 の差の原因の調査（`futex` / `sched_switch` の呼び出し元を `perf` で記録し、SwiftNIO のイベントループの挙動と合わせて調べる）
-- glibc 2.43 の malloc で futex が増えた理由の調査（同上）
+完了した項目:
+
+- musl 本来の allocator（mallocng）との比較（`musl-mallocng`、2026-10-01）
+- musl 版の memcpy の影響の確認（`musl-sdk-fastmemcpy`、2026-10-01）
+- glibc 2.43 の malloc で futex が増えた理由（glibc 内部のロック、`free` から。2026-10-01）
+
+残っている項目:
+
+- p99 の差の原因の特定（スレッドの動き方の違いは分かったが、因果関係は未確認）
 - 4 vCPU を超える環境（self-hosted runner など）での計測。GitHub の標準 runner は x64 / ARM64 とも 4 vCPU で、larger runners は個人アカウントでは使えない
 - Intel Xeon 8370C で glibc 2.43 の plaintext / json が遅くなった理由の調査。runner の CPU は選べないため、同じ CPU に当たったときに profile を取る

@@ -33,7 +33,7 @@ ARG MUSL_VERSION=v1.2.5
 # ================================
 # The image is written out (not an ARG) so Dependabot can update it. The Static Linux SDK
 # below must match the toolchain version exactly; update STATIC_SDK_URL/CHECKSUM together.
-FROM swift:6.4.0-resolute AS toolchain
+FROM swift:6.4.1-resolute AS toolchain
 
 ARG STATIC_SDK_URL=https://download.swift.org/swift-6.4.0-release/static-sdk/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz
 ARG STATIC_SDK_CHECKSUM=47d2fd89eebfdf9eb4d536b6710414297f755c17926cdebc4742c08982b40a9e
@@ -157,7 +157,7 @@ RUN SDK="$(uname -m)-swift-linux-musl" \
 #   glibc-noble       noble build, run against the host glibc
 #   glibc-noble-2.39  noble build, run with noble's glibc 2.39 bundled in glibc/ and started
 #                     through the bundled dynamic loader (see scripts/lib.sh)
-FROM swift:6.4.0-noble AS build-glibc-noble
+FROM swift:6.4.1-noble AS build-glibc-noble
 WORKDIR /build
 COPY Package.swift Package.resolved ./
 RUN swift package resolve
@@ -182,7 +182,7 @@ RUN mv /glibc /out/glibc \
 # glibc + jemalloc, built on Ubuntu 24.04 (noble)
 # ================================
 # Reproduces blindlog-api's Dockerfile before #379.
-FROM swift:6.4.0-noble AS build-glibc-jemalloc
+FROM swift:6.4.1-noble AS build-glibc-jemalloc
 RUN apt-get -q update \
     && DEBIAN_FRONTEND=noninteractive apt-get -q install -y --no-install-recommends libjemalloc-dev \
     && rm -rf /var/lib/apt/lists/*
